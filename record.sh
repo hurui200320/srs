@@ -1,0 +1,59 @@
+#!/bin/bash
+set -e
+
+RECORD_FILE="session_record.wav"
+LOG_FILE="session_timestamps.txt"
+FFMPEG_LOG_FILE="session_ffmpeg.log"
+
+
+# output log to ./ffmpeg.log, this will include the start timestamp
+ffmpeg -y \
+    -f pulse \
+    -ch_layout stereo \
+    -ac 2 \
+    -ar 44100 \
+    -i SpotifySink.monitor \
+    -c:a pcm_f32le \
+    -sample_fmt flt \
+    -rf64 auto \
+    "$RECORD_FILE" \
+    -hide_banner \
+    -nostats 2> "$FFMPEG_LOG_FILE" &
+FFMPEG_PID=$!
+
+cleanup() {
+    if [ -n "$FFMPEG_PID" ]; then
+        kill -SIGTERM "$FFMPEG_PID" 2>/dev/null
+        wait "$FFMPEG_PID"
+    fi
+}
+
+trap 'cleanup' SIGINT SIGTERM
+
+
+LAST_ID=""
+playerctl -p spotify metadata -F --format '{{ mpris:trackid }}|{{ status }}' | while read -r line; do
+    NOW=$(date +%s.%3N)
+
+    RAW_ID=$(echo "$line" | awk -F'|' '{print $1}')
+    STATUS=$(echo "$line" | awk -F'|' '{print $2}')
+
+    # clean up raw id
+    # might `be spotify:track:0cMCCfgXNvzpn9AgFJib76`
+    # or `/com/spotify/track/0cMCCfgXNvzpn9AgFJib76`
+    # we just want `0cMCCfgXNvzpn9AgFJib76`
+    CLEAN_ID=$(echo "$RAW_ID" | sed 's/.*:track://' | sed 's/.*\/track\///')
+
+    # skip if id is empty
+    if [ -z "$CLEAN_ID" ]; then
+        continue
+    fi
+
+    echo "$NOW,$CLEAN_ID,$STATUS"
+
+    if [ "$CLEAN_ID" != "$LAST_ID" ] && [ "$STATUS" == "Playing" ]; then
+        # record log on playing
+        echo "$NOW,$CLEAN_ID" >> "$LOG_FILE"
+        LAST_ID="$CLEAN_ID"
+    fi
+done
