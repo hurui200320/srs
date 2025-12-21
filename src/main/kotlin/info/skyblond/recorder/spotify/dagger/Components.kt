@@ -11,7 +11,4 @@ import se.michaelthelin.spotify.SpotifyApi
 @Component(modules = [SubCommandsModule::class, Providers::class])
 interface App {
     fun rootCommand(): RootCommand
-    fun spotifyApi(): SpotifyApi
-    fun imageDownloadService(): ImageDownloadService
-    fun metadataFetcher(): MetadataFetcher
 }

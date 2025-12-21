@@ -70,7 +70,7 @@ class SliceCommand @Inject constructor(
             val timestamp = arr[0].toDouble()
             val trackId = arr[1].trim()
             (timestamp - startRecordingTime) to trackId
-        }.sortedBy { it.first }
+        }.filter { it.first > 0.0 }.sortedBy { it.first }
 
         val tracksMetadata = metadataFetcher.fetchTracks(startAndTrackIds.map { it.second })
 
@@ -91,18 +91,11 @@ class SliceCommand @Inject constructor(
             val trackNumber = track.trackNumber // start with 1
 
             echo("Processing track '$trackName' from album '$albumName' by '$artistsStr' (Disk ${diskNumber}, Track $trackNumber)")
+            echo("Spotify track id: ${track.id}")
 
             if (recordingTime < duration) {
                 // TODO warning
                 echo("Recording time is less than track duration, skip this track: $trackName")
-                return@forEachIndexed
-            }
-
-            val recordDurationDiff = recordingTime - duration
-            echo("Recording time diff: $recordDurationDiff")
-            if (recordDurationDiff >= 1.0) {
-                // TODO warning
-                echo("Recording time diff bigger than 1s, skip this track: $trackName")
                 return@forEachIndexed
             }
 
