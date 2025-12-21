@@ -1,6 +1,7 @@
 package info.skyblond.recorder.spotify.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.core.terminal
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
@@ -54,17 +55,16 @@ class SliceCommand @Inject constructor(
 
 
     override fun run() {
-        echo("Load files...")
+        echo("Load ffmpeg logs...")
         val startRecordingTime = ffmpegLogFile.readLines()
             .filter { it.contains("Duration: N/A, start: ") }
             .apply { require(size == 1) { "Cannot find start time in ffmpeg log" } }
             .first().split("start: ")[1].split(",")[0].trim().toDouble()
 
-        // start, end
         echo("Reading recording file...")
         val recordingDuration = mediaService.probeMusicDuration(recordingFile)
 
-        echo("Processing tracks metadata...")
+        echo("Processing timestamps...")
         val startAndTrackIds = timestampFile.readLines().map {
             val arr = it.split(",")
             val timestamp = arr[0].toDouble()
@@ -90,24 +90,28 @@ class SliceCommand @Inject constructor(
             val diskNumber = track.discNumber // start with 1
             val trackNumber = track.trackNumber // start with 1
 
-            echo("Processing track '$trackName' from album '$albumName' by '$artistsStr' (Disk ${diskNumber}, Track $trackNumber)")
-            echo("Spotify track id: ${track.id}")
+            echo(terminal.theme.info(
+                "Processing track '$trackName' from album '$albumName' by '$artistsStr' (Disk ${diskNumber}, Track $trackNumber)"))
+            echo(terminal.theme.info(
+                "Spotify track id: ${track.id}"))
 
             if (recordingTime < duration) {
-                // TODO warning
-                echo("Recording time is less than track duration, skip this track: $trackName")
+                echo(terminal.theme.warning(
+                    "Recording time is less than track duration, skip this track: $trackName"))
                 return@forEachIndexed
             }
 
             // decide the start
             val ss = start + timingCorrection
-            echo("DBus recorded start: $start")
-            echo("Chosen start: $ss")
+            echo(terminal.theme.info(
+                "DBus recorded start: $start"))
+            echo(terminal.theme.info(
+                "Chosen start: $ss"))
 
             val contentFile = getMusicFile(contentFolder, albumName, track, diskNumber, trackNumber, trackName)
             if (contentFile.exists()) {
-                // TODO warning
-                echo("File already exists in content folder: ${contentFile.absolutePath}")
+                echo(terminal.theme.warning(
+                    "File already exists in content folder: ${contentFile.absolutePath}"))
                 return@forEachIndexed
             }
 
@@ -115,8 +119,8 @@ class SliceCommand @Inject constructor(
             outputFile.parentFile.mkdirs()
 
             if (outputFile.exists()) {
-                // TODO warning
-                echo("File already exists in output folder: ${outputFile.absolutePath}")
+                echo(terminal.theme.warning(
+                    "File already exists in output folder: ${outputFile.absolutePath}"))
                 return@forEachIndexed
             }
 
@@ -147,6 +151,8 @@ class SliceCommand @Inject constructor(
                 .done()
             ffmpegExecutor.createJob(ffmpegCmd).run()
             albumImage.delete()
+            echo(terminal.theme.success(
+                "Finished processing. File saved to: ${outputFile.absolutePath}"))
         }
     }
 
