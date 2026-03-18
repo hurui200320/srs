@@ -66,7 +66,7 @@ class SliceCommand @Inject constructor(
 
     private val marginSec by option("--margin", help = "Conservative margin before detected onset (seconds)")
         .double()
-        .default(0.03)
+        .default(0.05)
 
     override fun run() {
         // ── Parse ffmpeg log for recording start time ──
