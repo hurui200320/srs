@@ -44,7 +44,6 @@ class TransitionDetectorTest {
 
     @Test
     fun `cutPoint always based on corrected dbus regardless of RMS`() {
-        // RMS detects valley at 12.0, but dbus says 10.0 → cutPoint should be near 10.0
         val detector = TransitionDetector(
             detectors = listOf(mockDetector(cleanCandidate(12.0, 0.9))),
             driftTracker = EmaDriftTracker(initialEstimate = 0.0),
@@ -55,7 +54,6 @@ class TransitionDetectorTest {
             tracks = listOf(TrackInfo(dbusOffset = 10.0, spotifyDurationSec = 5.0)),
         )
         assertEquals(1, results.size)
-        // cutPoint = correctedOffset - margin = (10.0 + 0.0) - 0.03 = 9.97
         assertEquals(10.0 - MARGIN, results[0].cutPoint, 0.001)
     }
 
@@ -70,7 +68,6 @@ class TransitionDetectorTest {
             reader = mockReader(),
             tracks = listOf(TrackInfo(dbusOffset = 10.0, spotifyDurationSec = 5.0)),
         )
-        // cutPoint = (10.0 + 0.5) - 0.03 = 10.47
         assertEquals(10.5 - MARGIN, results[0].cutPoint, 0.001)
     }
 
@@ -121,8 +118,6 @@ class TransitionDetectorTest {
             tracks = listOf(TrackInfo(dbusOffset = 5.0, spotifyDurationSec = 10.0)),
         )
 
-        // driftObservation = 5.3 - 5.0 = 0.3
-        // drift updated toward 0.3
         assertTrue(driftTracker.estimate > 0.0, "Drift should have been updated, got ${driftTracker.estimate}")
     }
 
@@ -146,7 +141,6 @@ class TransitionDetectorTest {
     @Test
     fun `distant valley does not update drift`() {
         val driftTracker = EmaDriftTracker(initialEstimate = 0.0, alpha = 0.4)
-        // Valley at 15.0, but expected at 5.0 → distance = 10s > nearbyThreshold (2s)
         val detector = TransitionDetector(
             detectors = listOf(mockDetector(cleanCandidate(15.0, 0.9))),
             driftTracker = driftTracker,
@@ -189,38 +183,6 @@ class TransitionDetectorTest {
         assertEquals(TransitionConfidence.MEDIUM, results[0].confidence)
     }
 
-    // ── Gap estimate from clean valleys ──────────────────────────────
-
-    @Test
-    fun `gap estimate learned from clean valley duration`() {
-        // Two tracks. Track 0: clean valley with 400ms duration.
-        // Track 1: clean valley → gap estimate should have moved toward 0.4
-        val mockDet = mockk<BoundaryDetector> {
-            every { detect(any(), any(), any()) } answers {
-                val windowCenter = (secondArg<Double>() + thirdArg<Double>()) / 2.0
-                if (windowCenter < 5.0) listOf(cleanCandidate(0.3, 0.9, durationMs = 400.0))
-                else listOf(cleanCandidate(10.3, 0.9, durationMs = 400.0))
-            }
-        }
-        val detector = TransitionDetector(
-            detectors = listOf(mockDet),
-            driftTracker = EmaDriftTracker(),
-            margin = MARGIN,
-            initialGapEstimate = 0.3,
-        )
-        val results = detector.refineStartTimes(
-            reader = mockReader(),
-            tracks = listOf(
-                TrackInfo(dbusOffset = 0.0, spotifyDurationSec = 10.0),
-                TrackInfo(dbusOffset = 10.0, spotifyDurationSec = 5.0),
-            ),
-        )
-        assertEquals(2, results.size)
-        // Both should be HIGH (clean valleys)
-        assertEquals(TransitionConfidence.HIGH, results[0].confidence)
-        assertEquals(TransitionConfidence.HIGH, results[1].confidence)
-    }
-
     // ── Multi-track processing ──────────────────────────────────────
 
     @Test
@@ -249,57 +211,5 @@ class TransitionDetectorTest {
             assertTrue(results[i].cutPoint < results[i + 1].cutPoint,
                 "cutPoints should be increasing: ${results.map { it.cutPoint }}")
         }
-    }
-
-    // ── chainBreak behavior ─────────────────────────────────────────
-
-    @Test
-    fun `chainBreak does not update gap estimate`() {
-        // Track 0: clean valley 300ms → gap estimate updated
-        // Track 1: chainBreak=true, clean valley 300ms → gap should NOT be updated
-        val mockDet = mockk<BoundaryDetector> {
-            every { detect(any(), any(), any()) } answers {
-                val windowCenter = (secondArg<Double>() + thirdArg<Double>()) / 2.0
-                listOf(cleanCandidate(windowCenter, 0.9, durationMs = 300.0))
-            }
-        }
-        val detector = TransitionDetector(
-            detectors = listOf(mockDet),
-            driftTracker = EmaDriftTracker(),
-            margin = MARGIN,
-        )
-        val results = detector.refineStartTimes(
-            reader = mockReader(),
-            tracks = listOf(
-                TrackInfo(dbusOffset = 0.0, spotifyDurationSec = 10.0),
-                TrackInfo(dbusOffset = 50.0, spotifyDurationSec = 10.0, chainBreak = true),
-            ),
-        )
-        assertEquals(2, results.size)
-        // cutPoint for track 1 is still based on corrected dbus
-        // chainBreak should still allow drift calibration but skip gap update
-        assertEquals(TransitionConfidence.HIGH, results[1].confidence)
-        assertTrue(results[1].message.contains("chain break"), "Message: ${results[1].message}")
-    }
-
-    @Test
-    fun `chainBreak skips chain cross-validation`() {
-        // Track 0 at 0.0, Track 1 at 50.0 with chainBreak
-        // Without chainBreak, chain deviation would be huge → warning
-        // With chainBreak, no chain warning should appear
-        val detector = TransitionDetector(
-            detectors = listOf(mockDetector(/* empty */)),
-            driftTracker = EmaDriftTracker(),
-            margin = MARGIN,
-        )
-        val results = detector.refineStartTimes(
-            reader = mockReader(),
-            tracks = listOf(
-                TrackInfo(dbusOffset = 0.0, spotifyDurationSec = 10.0),
-                TrackInfo(dbusOffset = 50.0, spotifyDurationSec = 10.0, chainBreak = true),
-            ),
-        )
-        assertTrue(!results[1].message.contains("WARNING"),
-            "chainBreak should skip chain validation. Message: ${results[1].message}")
     }
 }

@@ -28,14 +28,10 @@ data class TransitionResult(
  *
  * @property dbusOffset offset in the recording where DBus reported this track started (seconds)
  * @property spotifyDurationSec track duration as reported by Spotify Web API (seconds)
- * @property chainBreak when true, the duration chain is reset at this track (no chain estimate
- *                      from the previous track). This should be set for the first track and for
- *                      any track immediately following a skipped/incomplete track.
  */
 data class TrackInfo(
     val dbusOffset: Double,
     val spotifyDurationSec: Double,
-    val chainBreak: Boolean = false,
 )
 
 /**
@@ -43,18 +39,15 @@ data class TrackInfo(
  *
  * - **Cut point**: always based on the drift-corrected DBus timestamp, not on audio analysis.
  *   This avoids ambiguity between Spotify inter-track gaps and song-internal silence.
- * - **RMS detection**: used to calibrate drift and gap estimates, and to assign confidence.
+ * - **RMS detection**: used to calibrate drift estimates and to assign confidence.
  *   Only "clean" valleys (short, clearly just a Spotify gap) update the drift tracker.
- * - **Duration chain**: used for cross-validation diagnostics only.
  *
  * @param detectors list of boundary detectors to query for candidates
  * @param driftTracker tracks cumulative drift between DBus timestamps and actual audio
  * @param searchBefore base search window before the expected offset (seconds)
  * @param searchAfter base search window after the expected offset (seconds)
  * @param margin conservative margin subtracted from corrected DBus offset (seconds)
- * @param initialGapEstimate initial estimate of the inter-track gap (seconds)
- * @param gapSmoothingAlpha EMA alpha for updating gap estimate (0.0 ~ 1.0)
- * @param cleanValleyMaxDurationMs maximum valley duration (ms) to be considered "clean" for drift/gap calibration
+ * @param cleanValleyMaxDurationMs maximum valley duration (ms) to be considered "clean" for drift calibration
  * @param nearbyThresholdSec maximum distance (s) between detected valley and expected position to be considered "nearby"
  */
 class TransitionDetector(
@@ -63,16 +56,14 @@ class TransitionDetector(
     private val searchBefore: Double = 1.5,
     private val searchAfter: Double = 2.5,
     private val margin: Double = 0.03,
-    private val initialGapEstimate: Double = 0.3,
-    private val gapSmoothingAlpha: Double = 0.2,
     private val cleanValleyMaxDurationMs: Double = 1000.0,
     private val nearbyThresholdSec: Double = 2.0,
 ) {
     /**
      * Refine the start times for all tracks in a recording session.
      *
-     * Processes tracks sequentially: each track's result may influence the
-     * drift estimate and gap estimate used for subsequent tracks.
+     * Processes tracks sequentially: clean valley detections calibrate the drift tracker,
+     * improving accuracy for subsequent tracks.
      *
      * @param reader WAV file reader for the recording
      * @param tracks list of tracks in playback order with DBus offsets and Spotify durations
@@ -84,12 +75,7 @@ class TransitionDetector(
     ): List<TransitionResult> {
         if (tracks.isEmpty()) return emptyList()
 
-        val results = mutableListOf<TransitionResult>()
-        var previousCorrectedOffset: Double? = null
-        var previousDuration: Double? = null
-        var gapEstimate = initialGapEstimate
-
-        for ((index, track) in tracks.withIndex()) {
+        return tracks.mapIndexed { index, track ->
             val correctedOffset = track.dbusOffset + driftTracker.estimate
 
             // Cut point is always based on corrected DBus offset
@@ -108,7 +94,7 @@ class TransitionDetector(
 
             val bestCandidate = candidates.firstOrNull()
 
-            // Determine confidence and update drift/gap from clean detections
+            // Determine confidence and update drift from clean detections
             val (confidence, message) = if (bestCandidate != null) {
                 val isClean = bestCandidate.featureDurationMs < cleanValleyMaxDurationMs
                 val isNearby = abs(bestCandidate.timestamp - correctedOffset) < nearbyThresholdSec
@@ -118,15 +104,8 @@ class TransitionDetector(
                     val driftObservation = bestCandidate.timestamp - track.dbusOffset
                     driftTracker.update(driftObservation, bestCandidate.confidence)
 
-                    // Update gap estimate from valley duration (skip on chainBreak to avoid pollution)
-                    if (!track.chainBreak) {
-                        val valleyGap = bestCandidate.featureDurationMs / 1000.0
-                        gapEstimate = gapSmoothingAlpha * valleyGap + (1.0 - gapSmoothingAlpha) * gapEstimate
-                    }
-
-                    val breakNote = if (track.chainBreak) " after chain break" else ""
                     TransitionConfidence.HIGH to
-                            "Track $index: clean valley (${bestCandidate.featureDurationMs.toInt()}ms)$breakNote, drift calibrated"
+                            "Track $index: clean valley (${bestCandidate.featureDurationMs.toInt()}ms), drift calibrated"
                 } else if (isNearby) {
                     // Long valley near expected position → may include song silence, don't calibrate
                     TransitionConfidence.MEDIUM to
@@ -140,28 +119,11 @@ class TransitionDetector(
                 TransitionConfidence.LOW to "Track $index: no valley detected"
             }
 
-            // Chain cross-validation (diagnostic only)
-            val chainWarning = if (!track.chainBreak && previousCorrectedOffset != null && previousDuration != null) {
-                val chainEstimate = previousCorrectedOffset + previousDuration + gapEstimate
-                val chainDeviation = abs(correctedOffset - chainEstimate)
-                if (chainDeviation > 2.0) {
-                    " [WARNING: chain deviation ${String.format("%.1f", chainDeviation)}s]"
-                } else null
-            } else null
-
-            results.add(
-                TransitionResult(
-                    cutPoint = cutPoint,
-                    confidence = confidence,
-                    message = message + (chainWarning ?: ""),
-                )
+            TransitionResult(
+                cutPoint = cutPoint,
+                confidence = confidence,
+                message = message,
             )
-
-            // Update chain state
-            previousCorrectedOffset = correctedOffset
-            previousDuration = track.spotifyDurationSec
         }
-
-        return results
     }
 }
