@@ -33,6 +33,7 @@ dependencies {
     implementation("com.github.ajalt.clikt:clikt-markdown:5.0.1")
 
     testImplementation(kotlin("test"))
+    testImplementation("io.mockk:mockk:1.14.9")
 }
 
 kotlin {
