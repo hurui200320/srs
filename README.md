@@ -11,6 +11,7 @@ Then slice the recording into individual tracks.
 First, create a virtual sink for Spotify:
 
 ```shell
+# or use pw-top to decide the parameter used by Spotify
 pactl load-module module-null-sink \
     sink_name=SpotifySink \
     sink_properties=device.description="Spotify_Virtual_Cable" \

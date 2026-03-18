@@ -7,7 +7,6 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.double
 import com.github.ajalt.clikt.parameters.types.file
-import info.skyblond.recorder.spotify.dagger.DaggerApp
 import info.skyblond.recorder.spotify.service.ImageDownloadService
 import info.skyblond.recorder.spotify.service.MediaService
 import info.skyblond.recorder.spotify.service.MetadataFetcher
