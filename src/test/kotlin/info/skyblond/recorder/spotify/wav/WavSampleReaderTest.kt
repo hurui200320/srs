@@ -14,8 +14,8 @@ class WavSampleReaderTest {
 
     companion object {
         private fun resourceFile(name: String): File {
-            val url = WavSampleReaderTest::class.java.getResource("/wav/$name")
-                ?: throw IllegalStateException("Test resource not found: /wav/$name")
+            val url = WavSampleReaderTest::class.java.getResource("/wav/sine/$name")
+                ?: throw IllegalStateException("Test resource not found: /wav/sine/$name")
             return File(url.toURI())
         }
 
