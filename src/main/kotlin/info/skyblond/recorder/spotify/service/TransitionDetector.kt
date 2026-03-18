@@ -1,6 +1,5 @@
 package info.skyblond.recorder.spotify.service
 
-import info.skyblond.recorder.spotify.detector.boundary.BoundaryCandidate
 import info.skyblond.recorder.spotify.detector.boundary.BoundaryDetector
 import info.skyblond.recorder.spotify.tracker.drift.DriftTracker
 import info.skyblond.recorder.spotify.wav.WavSampleReader
@@ -29,27 +28,34 @@ data class TransitionResult(
  *
  * @property dbusOffset offset in the recording where DBus reported this track started (seconds)
  * @property spotifyDurationSec track duration as reported by Spotify Web API (seconds)
+ * @property chainBreak when true, the duration chain is reset at this track (no chain estimate
+ *                      from the previous track). This should be set for the first track and for
+ *                      any track immediately following a skipped/incomplete track.
  */
 data class TrackInfo(
     val dbusOffset: Double,
     val spotifyDurationSec: Double,
+    val chainBreak: Boolean = false,
 )
 
 /**
- * Orchestrates adaptive track boundary detection by combining multiple signal sources:
- * 1. DBus timestamps corrected by drift tracking
- * 2. Duration chain estimation (previous boundary + track duration + gap)
- * 3. Audio-based boundary detection (e.g., RMS energy valley)
+ * Orchestrates adaptive track boundary detection using a DBus-primary approach:
  *
- * Processes tracks sequentially, updating drift and gap estimates as it goes.
+ * - **Cut point**: always based on the drift-corrected DBus timestamp, not on audio analysis.
+ *   This avoids ambiguity between Spotify inter-track gaps and song-internal silence.
+ * - **RMS detection**: used to calibrate drift and gap estimates, and to assign confidence.
+ *   Only "clean" valleys (short, clearly just a Spotify gap) update the drift tracker.
+ * - **Duration chain**: used for cross-validation diagnostics only.
  *
  * @param detectors list of boundary detectors to query for candidates
  * @param driftTracker tracks cumulative drift between DBus timestamps and actual audio
  * @param searchBefore base search window before the expected offset (seconds)
  * @param searchAfter base search window after the expected offset (seconds)
- * @param margin conservative margin subtracted from detected onset (seconds)
+ * @param margin conservative margin subtracted from corrected DBus offset (seconds)
  * @param initialGapEstimate initial estimate of the inter-track gap (seconds)
  * @param gapSmoothingAlpha EMA alpha for updating gap estimate (0.0 ~ 1.0)
+ * @param cleanValleyMaxDurationMs maximum valley duration (ms) to be considered "clean" for drift/gap calibration
+ * @param nearbyThresholdSec maximum distance (s) between detected valley and expected position to be considered "nearby"
  */
 class TransitionDetector(
     private val detectors: List<BoundaryDetector>,
@@ -59,21 +65,9 @@ class TransitionDetector(
     private val margin: Double = 0.03,
     private val initialGapEstimate: Double = 0.3,
     private val gapSmoothingAlpha: Double = 0.2,
+    private val cleanValleyMaxDurationMs: Double = 1000.0,
+    private val nearbyThresholdSec: Double = 2.0,
 ) {
-    companion object {
-        /** Threshold: RMS result vs chain estimate must be within this to be "consistent" */
-        private const val CHAIN_CONSISTENCY_THRESHOLD = 0.5 // seconds
-
-        /** Threshold: DBus corrected vs chain must be within this when RMS fails */
-        private const val DBUS_CHAIN_CONSISTENCY_THRESHOLD = 0.3 // seconds
-
-        /** Confidence boundary between high and medium */
-        private const val HIGH_CONFIDENCE_THRESHOLD = 0.7
-
-        /** Confidence boundary between medium and low */
-        private const val MEDIUM_CONFIDENCE_THRESHOLD = 0.4
-    }
-
     /**
      * Refine the start times for all tracks in a recording session.
      *
@@ -91,187 +85,83 @@ class TransitionDetector(
         if (tracks.isEmpty()) return emptyList()
 
         val results = mutableListOf<TransitionResult>()
-        var previousConfirmedStart: Double? = null
+        var previousCorrectedOffset: Double? = null
         var previousDuration: Double? = null
         var gapEstimate = initialGapEstimate
 
         for ((index, track) in tracks.withIndex()) {
-            val result = detectSingleTransition(
-                reader = reader,
-                track = track,
-                trackIndex = index,
-                previousConfirmedStart = previousConfirmedStart,
-                previousDuration = previousDuration,
-                gapEstimate = gapEstimate,
-            )
-            results.add(result.first)
+            val correctedOffset = track.dbusOffset + driftTracker.estimate
 
-            // Update state for next iteration
-            previousConfirmedStart = result.first.cutPoint + margin // recover the onset before margin
-            previousDuration = track.spotifyDurationSec
+            // Cut point is always based on corrected DBus offset
+            val cutPoint = (correctedOffset - margin).coerceAtLeast(0.0)
 
-            // Update gap estimate if we got a good detection and have a previous reference
-            val updatedGap = result.second
-            if (updatedGap != null) {
-                gapEstimate = gapSmoothingAlpha * updatedGap + (1.0 - gapSmoothingAlpha) * gapEstimate
-            }
-        }
+            // Determine search window, scaled by drift uncertainty
+            val uncertaintyScale = 1.0 + driftTracker.uncertainty / 5.0
+            val windowStart = (correctedOffset - searchBefore * uncertaintyScale).coerceAtLeast(0.0)
+            val windowEnd = (correctedOffset + searchAfter * uncertaintyScale).coerceAtMost(reader.duration)
 
-        // Post-processing: consistency check
-        return addConsistencyWarnings(results, tracks, gapEstimate)
-    }
+            // Query all boundary detectors
+            val candidates = if (windowEnd > windowStart) {
+                detectors.flatMap { it.detect(reader, windowStart, windowEnd) }
+                    .sortedByDescending { it.confidence }
+            } else emptyList()
 
-    /**
-     * Detect transition for a single track.
-     * Returns (TransitionResult, observedGap?) where observedGap is non-null
-     * if the gap estimate should be updated.
-     */
-    private fun detectSingleTransition(
-        reader: WavSampleReader,
-        track: TrackInfo,
-        trackIndex: Int,
-        previousConfirmedStart: Double?,
-        previousDuration: Double?,
-        gapEstimate: Double,
-    ): Pair<TransitionResult, Double?> {
-        val correctedOffset = track.dbusOffset + driftTracker.estimate
+            val bestCandidate = candidates.firstOrNull()
 
-        // Duration chain estimate (not available for first track)
-        val chainEstimate: Double? = if (previousConfirmedStart != null && previousDuration != null) {
-            previousConfirmedStart + previousDuration + gapEstimate
-        } else null
+            // Determine confidence and update drift/gap from clean detections
+            val (confidence, message) = if (bestCandidate != null) {
+                val isClean = bestCandidate.featureDurationMs < cleanValleyMaxDurationMs
+                val isNearby = abs(bestCandidate.timestamp - correctedOffset) < nearbyThresholdSec
 
-        // Determine search window, scaled by drift uncertainty
-        val uncertaintyScale = 1.0 + driftTracker.uncertainty / 5.0
-        val windowStart = (correctedOffset - searchBefore * uncertaintyScale).coerceAtLeast(0.0)
-        val windowEnd = (correctedOffset + searchAfter * uncertaintyScale).coerceAtMost(reader.duration)
+                if (isClean && isNearby) {
+                    // Clean valley near expected position → calibrate drift
+                    val driftObservation = bestCandidate.timestamp - track.dbusOffset
+                    driftTracker.update(driftObservation, bestCandidate.confidence)
 
-        if (windowEnd <= windowStart) {
-            return makeResult(correctedOffset, TransitionConfidence.LOW, "Window collapsed") to null
-        }
+                    // Update gap estimate from valley duration (skip on chainBreak to avoid pollution)
+                    if (!track.chainBreak) {
+                        val valleyGap = bestCandidate.featureDurationMs / 1000.0
+                        gapEstimate = gapSmoothingAlpha * valleyGap + (1.0 - gapSmoothingAlpha) * gapEstimate
+                    }
 
-        // Query all boundary detectors
-        val candidates = detectors.flatMap { it.detect(reader, windowStart, windowEnd) }
-            .sortedByDescending { it.confidence }
-
-        // Fusion decision
-        return fuse(
-            candidates = candidates,
-            correctedOffset = correctedOffset,
-            chainEstimate = chainEstimate,
-            previousConfirmedStart = previousConfirmedStart,
-            previousDuration = previousDuration,
-            trackIndex = trackIndex,
-        )
-    }
-
-    /**
-     * Core fusion logic implementing the priority-based decision from design doc section 3.5.
-     */
-    private fun fuse(
-        candidates: List<BoundaryCandidate>,
-        correctedOffset: Double,
-        chainEstimate: Double?,
-        previousConfirmedStart: Double?,
-        previousDuration: Double?,
-        trackIndex: Int,
-    ): Pair<TransitionResult, Double?> {
-        val bestCandidate = candidates.firstOrNull()
-
-        // Case: first track (no chain available)
-        if (chainEstimate == null) {
-            return if (bestCandidate != null) {
-                val onset = bestCandidate.timestamp
-                val confidence = classifyConfidence(bestCandidate.confidence)
-                if (confidence != TransitionConfidence.LOW) {
-                    updateDrift(onset, correctedOffset, bestCandidate.confidence)
+                    val breakNote = if (track.chainBreak) " after chain break" else ""
+                    TransitionConfidence.HIGH to
+                            "Track $index: clean valley (${bestCandidate.featureDurationMs.toInt()}ms)$breakNote, drift calibrated"
+                } else if (isNearby) {
+                    // Long valley near expected position → may include song silence, don't calibrate
+                    TransitionConfidence.MEDIUM to
+                            "Track $index: long valley (${bestCandidate.featureDurationMs.toInt()}ms), no drift update"
+                } else {
+                    // Valley far from expected position → unreliable
+                    TransitionConfidence.LOW to
+                            "Track $index: valley too far from expected position (${String.format("%.2f", abs(bestCandidate.timestamp - correctedOffset))}s)"
                 }
-                makeResult(onset, confidence, "Track $trackIndex: first track, used ${bestCandidate.source} (${bestCandidate.confidence})") to null
             } else {
-                makeResult(correctedOffset, TransitionConfidence.LOW, "Track $trackIndex: first track, RMS failed, used corrected DBus") to null
+                TransitionConfidence.LOW to "Track $index: no valley detected"
             }
+
+            // Chain cross-validation (diagnostic only)
+            val chainWarning = if (!track.chainBreak && previousCorrectedOffset != null && previousDuration != null) {
+                val chainEstimate = previousCorrectedOffset + previousDuration + gapEstimate
+                val chainDeviation = abs(correctedOffset - chainEstimate)
+                if (chainDeviation > 2.0) {
+                    " [WARNING: chain deviation ${String.format("%.1f", chainDeviation)}s]"
+                } else null
+            } else null
+
+            results.add(
+                TransitionResult(
+                    cutPoint = cutPoint,
+                    confidence = confidence,
+                    message = message + (chainWarning ?: ""),
+                )
+            )
+
+            // Update chain state
+            previousCorrectedOffset = correctedOffset
+            previousDuration = track.spotifyDurationSec
         }
 
-        // Case 1: High confidence detection
-        if (bestCandidate != null && bestCandidate.confidence >= HIGH_CONFIDENCE_THRESHOLD) {
-            val onset = bestCandidate.timestamp
-            updateDrift(onset, correctedOffset, bestCandidate.confidence)
-            val observedGap = computeObservedGap(onset, previousConfirmedStart, previousDuration)
-            return makeResult(onset, TransitionConfidence.HIGH, "Track $trackIndex: high confidence ${bestCandidate.source} (${bestCandidate.confidence})") to observedGap
-        }
-
-        // Case 2: Medium confidence detection
-        if (bestCandidate != null && bestCandidate.confidence >= MEDIUM_CONFIDENCE_THRESHOLD) {
-            val onset = bestCandidate.timestamp
-            val chainDiff = abs(onset - chainEstimate)
-
-            return if (chainDiff < CHAIN_CONSISTENCY_THRESHOLD) {
-                // Consistent with chain → trust RMS
-                updateDrift(onset, correctedOffset, bestCandidate.confidence)
-                val observedGap = computeObservedGap(onset, previousConfirmedStart, previousDuration)
-                makeResult(onset, TransitionConfidence.MEDIUM, "Track $trackIndex: medium confidence ${bestCandidate.source}, consistent with chain (diff=${chainDiff}s)") to observedGap
-            } else {
-                // Inconsistent → fallback to average of corrected DBus and chain
-                val fallback = (correctedOffset + chainEstimate) / 2.0
-                makeResult(fallback, TransitionConfidence.LOW, "Track $trackIndex: medium confidence ${bestCandidate.source} but inconsistent with chain (diff=${chainDiff}s), used dbus+chain average") to null
-            }
-        }
-
-        // Case 3: Detection failed (no candidate or low confidence)
-        val dbusChainDiff = abs(correctedOffset - chainEstimate)
-        return if (dbusChainDiff < DBUS_CHAIN_CONSISTENCY_THRESHOLD) {
-            val avg = (correctedOffset + chainEstimate) / 2.0
-            makeResult(avg, TransitionConfidence.LOW, "Track $trackIndex: RMS failed, dbus and chain agree (diff=${dbusChainDiff}s), used average") to null
-        } else {
-            makeResult(chainEstimate, TransitionConfidence.LOW, "Track $trackIndex: RMS failed, dbus and chain disagree (diff=${dbusChainDiff}s), used chain estimate") to null
-        }
-    }
-
-    private fun makeResult(onset: Double, confidence: TransitionConfidence, message: String): TransitionResult {
-        return TransitionResult(
-            cutPoint = onset - margin,
-            confidence = confidence,
-            message = message,
-        )
-    }
-
-    private fun classifyConfidence(confidence: Double): TransitionConfidence {
-        return when {
-            confidence >= HIGH_CONFIDENCE_THRESHOLD -> TransitionConfidence.HIGH
-            confidence >= MEDIUM_CONFIDENCE_THRESHOLD -> TransitionConfidence.MEDIUM
-            else -> TransitionConfidence.LOW
-        }
-    }
-
-    private fun updateDrift(detectedOnset: Double, correctedOffset: Double, confidence: Double) {
-        val observedDrift = detectedOnset - (correctedOffset - driftTracker.estimate)
-        driftTracker.update(observedDrift, confidence)
-    }
-
-    private fun computeObservedGap(
-        detectedOnset: Double,
-        previousConfirmedStart: Double?,
-        previousDuration: Double?,
-    ): Double? {
-        if (previousConfirmedStart == null || previousDuration == null) return null
-        return detectedOnset - (previousConfirmedStart + previousDuration)
-    }
-
-    private fun addConsistencyWarnings(
-        results: MutableList<TransitionResult>,
-        tracks: List<TrackInfo>,
-        gapEstimate: Double,
-    ): List<TransitionResult> {
-        val tolerance = 2.0 // seconds
-        return results.mapIndexed { index, result ->
-            if (index < results.size - 1) {
-                val effectiveDuration = results[index + 1].cutPoint - result.cutPoint
-                val expectedDuration = tracks[index].spotifyDurationSec + gapEstimate + margin // account for margin on both ends
-                val deviation = abs(effectiveDuration - expectedDuration)
-                if (deviation > tolerance) {
-                    result.copy(message = result.message + " [WARNING: duration deviation ${String.format("%.1f", deviation)}s]")
-                } else result
-            } else result
-        }
+        return results
     }
 }

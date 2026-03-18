@@ -155,27 +155,27 @@ class RmsValleyDetectorTest {
     }
 
     @Test
-    fun `detected onset is near actual gap end`() {
+    fun `detected boundary is near gap end`() {
         // gap_clear.wav: 440Hz 0.5s → silence 0.3s → 880Hz 0.5s
-        // The new track starts at approximately 0.8s
+        // timestamp = valley.endFrame ≈ where energy rises ≈ 0.8s (Song B start)
         val reader = WavSampleReader(gapFile("gap_clear.wav"))
         val candidates = detector.detect(reader, 0.0, reader.duration)
 
         assertTrue(candidates.isNotEmpty(), "Should detect boundary")
         val best = candidates.first()
-        val expectedOnset = 0.8
-        val error = abs(best.timestamp - expectedOnset)
-        assertTrue(error < 0.05, "Onset should be near 0.8s, got ${best.timestamp} (error: ${error}s)")
+        assertTrue(best.timestamp > 0.7, "Valley end should be near Song B start, got ${best.timestamp}")
+        assertTrue(best.timestamp < 0.9, "Valley end should not overshoot, got ${best.timestamp}")
     }
 
     @Test
-    fun `candidate source is RMS_VALLEY`() {
+    fun `candidate source and featureDuration are correct`() {
         val reader = WavSampleReader(gapFile("gap_clear.wav"))
         val candidates = detector.detect(reader, 0.0, reader.duration)
 
         assertTrue(candidates.isNotEmpty())
         for (c in candidates) {
             assertEquals(BoundarySource.RMS_VALLEY, c.source)
+            assertTrue(c.featureDurationMs > 0.0, "Feature duration should be positive, got ${c.featureDurationMs}")
         }
     }
 

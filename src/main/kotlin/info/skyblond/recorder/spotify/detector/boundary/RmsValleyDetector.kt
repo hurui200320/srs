@@ -2,7 +2,6 @@ package info.skyblond.recorder.spotify.detector.boundary
 
 import info.skyblond.recorder.spotify.wav.WavSampleReader
 import kotlin.math.abs
-import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
@@ -80,17 +79,10 @@ class RmsValleyDetector(
             // Weighted combination
             val score = energyScore * 0.5 + durationScore * 0.2 + proximityScore * 0.3
 
-            // Find onset: first frame after valley bottom where energy rises above onset threshold
-            val onsetThreshold = maxOf(valleyBottomEnergy * 10.0, median * 0.1)
-            var onsetFrame = valley.endFrame
-            for (f in valley.bottomFrame until min(smoothed.size, valley.endFrame + smoothed.size / 4)) {
-                if (smoothed[f] >= onsetThreshold) {
-                    onsetFrame = f
-                    break
-                }
-            }
-
-            val timestamp = windowStart + onsetFrame * frameDurationSec
+            // Use valley end as the boundary point (where energy rises above threshold).
+            // For clean Spotify gaps, this approximates the new track's start time.
+            // TransitionDetector uses this for drift calibration, not as the cut point.
+            val timestamp = windowStart + valley.endFrame * frameDurationSec
 
             // Confidence based on energy contrast
             val confidence = when {
@@ -109,6 +101,7 @@ class RmsValleyDetector(
                 timestamp = timestamp,
                 confidence = confidence.coerceIn(0.0, 1.0),
                 source = BoundarySource.RMS_VALLEY,
+                featureDurationMs = valleyDurationMs,
             )
         }.sortedByDescending { it.confidence }
     }

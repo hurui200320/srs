@@ -17,11 +17,15 @@ enum class BoundarySource {
  * @property timestamp the detected boundary time in seconds (absolute offset in the recording file)
  * @property confidence confidence score in the range (0.0, 1.0]
  * @property source the detection algorithm that produced this candidate
+ * @property featureDurationMs duration of the detected feature in milliseconds.
+ *           For RMS valley detection this is the valley duration; used by the fusion logic
+ *           to distinguish clean Spotify gaps from extended silence contaminated by song content.
  */
 data class BoundaryCandidate(
     val timestamp: Double,
     val confidence: Double,
     val source: BoundarySource,
+    val featureDurationMs: Double,
 )
 
 /**
