@@ -125,17 +125,19 @@ The slicer uses **two-point valley search** to find precise cut points for each 
 
 + For each track, it searches for a pair of RMS energy valleys — one near the expected start,
   one near the expected end — whose spacing matches the Spotify-reported track duration.
-+ The cut point is placed symmetrically between the valley pair, ensuring equal
-  silence padding before and after the track (no cut-head, no cut-tail).
++ The cut point minimizes leading silence while ensuring the end does not exceed the
+  end valley. This avoids both cut-head and cut-tail.
 + Each track is processed independently; errors do not propagate between tracks.
 
 If the slicer cannot find a valid valley pair for a track (e.g., gapless albums),
 it **skips** that track and prints a warning. You can fix this by placing non-gapless tracks
 around the problematic song in your Spotify playlist and re-recording.
 
-Optional parameter:
+Optional parameters:
 
 + `--search-window`: Search window radius around expected positions in seconds (default: `10.0`).
++ `--margin`: Shift all cut points earlier by this amount in seconds (default: `0.0`).
+  Only needed when the automatic detection produces unsatisfactory results for specific tracks.
 
 The command will automatically find the required files in the current directory.
 If you have a different file name or different location for those files,
@@ -149,6 +151,18 @@ are automatically detected and excluded.
 The slicer will write the track files to the output directory.
 It's highly recommended to go through the tracks one by one and check if the song ends correctly.
 Then you may move them to the content directory, so next time the slicer will skip them.
+
+#### Adjusting cuts with `--margin`
+
+If you find that some tracks have their beginning cut off or feel too abrupt,
+you can use `--margin` to shift cut points earlier:
+
+1. Delete the problematic files from the output directory.
+2. Re-run the slicer with `--margin` (e.g., `--margin 0.3`).
+3. The slicer will skip files that already exist and only re-process the deleted ones.
+
+A larger margin shifts cut points earlier, adding more silence before the track starts.
+This is a manual override — the default value of `0.0` lets the algorithm work fully automatically.
 
 ## Notes
 

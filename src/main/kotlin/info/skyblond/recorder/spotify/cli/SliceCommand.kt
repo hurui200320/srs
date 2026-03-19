@@ -55,6 +55,11 @@ class SliceCommand @Inject constructor(
         .double()
         .default(10.0)
 
+    private val marginSec by option("--margin", help = "Shift cut points earlier by this amount (seconds). " +
+            "Default 0 (no adjustment). Increase to fix tracks where the automatic detection cuts too late.")
+        .double()
+        .default(0.0)
+
     override fun run() {
         // ── Parse ffmpeg log for recording start time ──
         echo("Load ffmpeg logs...")
@@ -109,6 +114,7 @@ class SliceCommand @Inject constructor(
         val transitionDetector = TransitionDetector(
             valleyDetector = RmsValleyDetector(),
             searchWindow = searchWindow,
+            margin = marginSec,
         )
         val refinedResults = transitionDetector.refineStartTimes(reader, trackInfos)
         val resultMap = viableIndices.zip(refinedResults).toMap()

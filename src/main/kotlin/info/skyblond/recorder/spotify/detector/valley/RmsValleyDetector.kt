@@ -18,7 +18,7 @@ import kotlin.math.sqrt
 class RmsValleyDetector(
     private val frameDurationMs: Double = 10.0,
     private val smoothingWindowMs: Double = 50.0,
-    private val valleyThresholdFactor: Double = 0.05,
+    private val valleyThresholdFactor: Double = 0.01,
     private val minValleyDurationMs: Double = 50.0,
 ) : ValleyDetector {
 

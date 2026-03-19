@@ -47,6 +47,9 @@ data class TrackInfo(
  *
  * @param valleyDetector detects RMS energy valleys in audio windows
  * @param searchWindow search radius in seconds around the expected start/end positions
+ * @param margin user-adjustable offset subtracted from the computed cut point (seconds).
+ *               Default 0.0 (no adjustment). Increase to shift all cuts earlier when
+ *               the automatic detection produces unsatisfactory results for specific tracks.
  * @param maxDurationError maximum allowed difference between valley pair spacing
  *                         and Spotify duration (seconds)
  * @param w1 scoring weight for duration match accuracy (default 10.0)
@@ -56,6 +59,7 @@ data class TrackInfo(
 class TransitionDetector(
     private val valleyDetector: ValleyDetector,
     private val searchWindow: Double = 10.0,
+    private val margin: Double = 0.0,
     private val maxDurationError: Double = 3.0,
     private val w1: Double = 10.0,
     private val w2: Double = 1.0,
@@ -115,17 +119,22 @@ class TransitionDetector(
         }
 
         val (v1, v2, durationError) = bestPair
-        val totalGap = v2.bottomTime - v1.bottomTime
-        val padding = (totalGap - duration) / 2.0
-        val cutPoint = v1.bottomTime + padding
+        // Minimize leading silence: start as late as possible (at v1.bottom),
+        // but ensure the end (cutPoint + D) does not exceed bottom + some duration (postBottomTime)
+        // clamp this duration to at most 1s in case of a long silence,
+        // otherwise just use the middle point between bottom and end
+        val postBottomTime = minOf((v2.endTime - v2.bottomTime) / 2, 1.0)
+        val rawCutPoint = maxOf(v1.bottomTime, v2.bottomTime + postBottomTime - duration)
+        val cutPoint = rawCutPoint - margin
 
-        val confidence = if (durationError < 1.0) TransitionConfidence.HIGH else TransitionConfidence.MEDIUM
+        val confidence =
+            if (durationError < 1.0) TransitionConfidence.HIGH
+            else TransitionConfidence.MEDIUM
 
         return TransitionResult(
             cutPoint = cutPoint,
             confidence = confidence,
-            message = "Track $trackIndex: paired valleys (error=${String.format("%.3f", durationError)}s, " +
-                    "padding=${String.format("%.3f", padding)}s)",
+            message = "Track $trackIndex: paired valleys (error=${"%.3f".format(durationError)}s)",
         )
     }
 
@@ -153,7 +162,8 @@ class TransitionDetector(
                 if (durationError > maxDurationError) continue
 
                 val scoreDuration = -durationError
-                val scoreProximity = -(abs(v1.bottomTime - estimatedStart) + abs(v2.bottomTime - estimatedEnd))
+                val scoreProximity =
+                    -(abs(v1.bottomTime - estimatedStart) + abs(v2.bottomTime - estimatedEnd))
                 val scoreDepth = -(v1.bottomEnergy + v2.bottomEnergy)
 
                 val score = w1 * scoreDuration + w2 * scoreProximity + w3 * scoreDepth

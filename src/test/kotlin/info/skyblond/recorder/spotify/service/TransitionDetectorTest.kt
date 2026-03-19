@@ -60,15 +60,19 @@ class TransitionDetectorTest {
 
         val result = results[0]
         assertNotNull(result)
-        // Best pair: (99.5, 299.8), gap=200.3, padding=0.15
-        // cutPoint = 99.5 + 0.15 = 99.65
-        assertEquals(99.65, result.cutPoint, 0.05)
+        // Best pair: (99.5, 299.8), v2.end=299.95
+        // postBottomTime = min((299.95-299.8)/2, 1.0) = 0.075
+        // rawCutPoint = max(99.5, 299.8+0.075-200) = max(99.5, 99.875) = 99.875
+        assertEquals(99.875, result.cutPoint, 0.05)
         assertEquals(TransitionConfidence.HIGH, result.confidence) // error 0.3 < 1.0
     }
 
     @Test
-    fun `symmetric padding distributes silence equally`() {
-        // Song: duration=100s. Valleys at 10.0 and 110.5 → gap=100.5, padding=0.25
+    fun `minimize leading silence with postBottomTime`() {
+        // Song: duration=100s. Valleys at 10.0 and 110.5
+        // v2.end = 110.65 (valley helper adds ±0.15)
+        // postBottomTime = min((110.65-110.5)/2, 1.0) = 0.075
+        // rawCutPoint = max(10.0, 110.5+0.075-100) = max(10.0, 10.575) = 10.575
         val mockDetector = mockk<ValleyDetector> {
             every { detectValleys(any(), any(), any()) } answers {
                 val winStart = secondArg<Double>()
@@ -84,22 +88,19 @@ class TransitionDetectorTest {
 
         val result = results[0]
         assertNotNull(result)
-        // padding = (110.5 - 10.0 - 100) / 2 = 0.25
-        // cutPoint = 10.0 + 0.25 = 10.25
-        // cut_end = 10.25 + 100 = 110.25
-        // silence before = 10.25 - 10.0 = 0.25 (from v1.bottom)
-        // silence after = 110.5 - 110.25 = 0.25 (from v2.bottom)
-        assertEquals(10.25, result.cutPoint, 0.01)
+        assertEquals(10.575, result.cutPoint, 0.01)
     }
 
     @Test
-    fun `exact duration match gives zero padding`() {
-        // Valleys exactly duration apart
+    fun `exact duration match gives near-zero leading silence`() {
+        // Valleys exactly duration apart: v1=10.0, v2=110.0
+        // postBottomTime = 0.075
+        // rawCutPoint = max(10.0, 110.0+0.075-100) = max(10.0, 10.075) = 10.075
         val mockDetector = mockk<ValleyDetector> {
             every { detectValleys(any(), any(), any()) } answers {
                 val winStart = secondArg<Double>()
                 if (winStart < 50.0) listOf(valley(10.0))
-                else listOf(valley(110.0)) // exactly 100s apart
+                else listOf(valley(110.0))
             }
         }
         val detector = TransitionDetector(valleyDetector = mockDetector)
@@ -110,7 +111,7 @@ class TransitionDetectorTest {
 
         val result = results[0]
         assertNotNull(result)
-        assertEquals(10.0, result.cutPoint, 0.01) // padding = 0
+        assertEquals(10.075, result.cutPoint, 0.01)
     }
 
     // ── Duration constraint filtering ───────────────────────────────
@@ -297,5 +298,57 @@ class TransitionDetectorTest {
         assertNotNull(results[0], "Track 0 should succeed")
         assertNull(results[1], "Track 1 should fail (no valleys)")
         assertNotNull(results[2], "Track 2 should succeed independently")
+    }
+
+    // ── Margin (user manual adjustment) ─────────────────────────────
+
+    @Test
+    fun `margin shifts cut point earlier`() {
+        val mockDetector = mockk<ValleyDetector> {
+            every { detectValleys(any(), any(), any()) } answers {
+                val winStart = secondArg<Double>()
+                if (winStart < 50.0) listOf(valley(10.0))
+                else listOf(valley(110.0))
+            }
+        }
+        // Without margin: rawCutPoint = max(10.0, 110.075-100) = 10.075
+        val detectorNoMargin = TransitionDetector(valleyDetector = mockDetector)
+        val resultNoMargin = detectorNoMargin.refineStartTimes(
+            reader = mockReader(),
+            tracks = listOf(TrackInfo(dbusOffset = 10.0, spotifyDurationSec = 100.0)),
+        )[0]
+
+        // With margin=0.5: cutPoint = rawCutPoint - 0.5
+        val detectorWithMargin = TransitionDetector(valleyDetector = mockDetector, margin = 0.5)
+        val resultWithMargin = detectorWithMargin.refineStartTimes(
+            reader = mockReader(),
+            tracks = listOf(TrackInfo(dbusOffset = 10.0, spotifyDurationSec = 100.0)),
+        )[0]
+
+        assertNotNull(resultNoMargin)
+        assertNotNull(resultWithMargin)
+        assertEquals(resultNoMargin.cutPoint - 0.5, resultWithMargin.cutPoint, 0.001,
+            "Margin should shift cutPoint earlier by exactly 0.5s")
+    }
+
+    @Test
+    fun `default margin is zero`() {
+        val mockDetector = mockk<ValleyDetector> {
+            every { detectValleys(any(), any(), any()) } answers {
+                val winStart = secondArg<Double>()
+                if (winStart < 50.0) listOf(valley(10.0))
+                else listOf(valley(110.0))
+            }
+        }
+        // Default margin = 0.0, rawCutPoint should equal cutPoint
+        val detector = TransitionDetector(valleyDetector = mockDetector)
+        val result = detector.refineStartTimes(
+            reader = mockReader(),
+            tracks = listOf(TrackInfo(dbusOffset = 10.0, spotifyDurationSec = 100.0)),
+        )[0]
+
+        assertNotNull(result)
+        // rawCutPoint = max(10.0, 110.075-100) = 10.075. With margin=0, cutPoint = 10.075
+        assertEquals(10.075, result.cutPoint, 0.01)
     }
 }
