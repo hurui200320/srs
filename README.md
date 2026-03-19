@@ -11,14 +11,28 @@ Then slice the recording into individual tracks.
 First, create a virtual sink for Spotify:
 
 ```shell
-# or use pw-top to decide the parameter used by Spotify
-pactl load-module module-null-sink \
-    sink_name=SpotifySink \
-    sink_properties=device.description="Spotify_Virtual_Cable" \
-    format=float32le rate=44100 channels=2
+# use pw-top to decide the parameter used by Spotify
+# F32LE 44100 2ch
+# it's important to force the rate and quantum to the same value
+# otherwise the pipewire will do re-sampling
+pw-cli create-node adapter '{
+    factory.name       = support.null-audio-sink
+    node.name          = "SpotifySink"
+    node.description   = "Spotify_Virtual_Cable"
+    media.class        = "Audio/Sink"
+    audio.format       = "F32LE"
+    audio.rate         = 44100
+    audio.channels     = 2
+    audio.position     = [ FL FR ]
+    node.force-rate    = 44100
+    node.force-quantum = 8192
+    object.linger      = true
+}'
+# to get rid of it, use pw-top to find the id of the sink, then
+# pw-cli destroy <id>
 ```
 
-Then use something like `pavucontrol` to direct the spotify output to this sink.
+Then use something like `pavucontrol` or `qpwgraph` to direct the spotify output to this sink.
 Later we will use ffmpeg to record from this sink.
 
 Before recording, ensure you turn off the optimizations in Spotify:

@@ -30,6 +30,7 @@ class LoginCommand @Inject constructor(
                     "playlist-read-private",
                     "user-read-playback-state",
                     "user-read-currently-playing",
+                    "user-library-read",
                 ).joinToString(separator = ",")
             )
             .build()

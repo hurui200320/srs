@@ -21,6 +21,7 @@ import net.bramp.ffmpeg.FFmpegExecutor
 import net.bramp.ffmpeg.builder.FFmpegBuilder
 import se.michaelthelin.spotify.model_objects.specification.Track
 import java.io.File
+import kotlin.math.abs
 
 /**
  * Slice the recording based on the provided input.
@@ -104,13 +105,15 @@ class SliceCommand @Inject constructor(
         startAndTrack.forEachIndexed { index, (start, track) ->
             val nextStart = startAndTrack.getOrNull(index + 1)?.first ?: recordingDuration
             val duration = track.durationMs / 1000.0
-            if (nextStart - start >= duration) {
+            val actualDuration = nextStart - start
+            if (abs(actualDuration - duration) <= 2.5) {
                 viableIndices.add(index)
                 trackInfos.add(TrackInfo(dbusOffset = start, spotifyDurationSec = duration))
             } else {
                 echo(
                     terminal.theme.warning(
-                        "Pre-filter: skipping incomplete track '${track.name}' (recording time < track duration)"
+                        "Pre-filter: skipping incomplete track '${track.name}' " +
+                                "(recording time ${actualDuration} < track duration $duration)"
                     )
                 )
             }
@@ -195,6 +198,10 @@ class SliceCommand @Inject constructor(
                 .addExtraArgs("-c:a", "flac")
                 .addExtraArgs("-sample_fmt", "s32")
                 .addExtraArgs("-compression_level", "8")
+                // do not add dither for lossless
+                .addExtraArgs("-dither_method", "none")
+                .addExtraArgs("-af", "volume=-0.5dB")
+                // metadata
                 .addExtraArgs("-metadata", "title=$trackName")
                 .addExtraArgs("-metadata", "artist=$artistsStr")
                 .addExtraArgs("-metadata", "album=$albumName")

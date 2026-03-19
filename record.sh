@@ -7,7 +7,8 @@ FFMPEG_LOG_FILE="session_ffmpeg.log"
 
 
 # output log to ./ffmpeg.log, this will include the start timestamp
-ffmpeg -y \
+PULSE_LATENCY_MSEC=180 ffmpeg -y \
+    -thread_queue_size 4096 \
     -f pulse \
     -ch_layout stereo \
     -ac 2 \
