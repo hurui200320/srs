@@ -1,15 +1,14 @@
-package info.skyblond.recorder.spotify.detector.boundary
+package info.skyblond.recorder.spotify.detector.valley
 
 import info.skyblond.recorder.spotify.wav.WavSampleReader
-import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
- * Detects track boundaries by finding RMS energy valleys in the audio signal.
+ * Detects RMS energy valleys in an audio signal.
  *
- * When Spotify transitions between tracks (with crossfade disabled), there is typically
- * a brief silence gap. This detector finds such gaps by computing a per-frame RMS energy
- * profile, smoothing it, and scanning for contiguous low-energy regions ("valleys").
+ * Computes a per-frame RMS energy profile, applies smoothing, and scans for
+ * contiguous low-energy regions ("valleys"). Returns all detected valleys
+ * as [ValleyInfo] objects for the caller to use in pairing and scoring.
  *
  * @param frameDurationMs duration of each analysis frame in milliseconds (default 10ms)
  * @param smoothingWindowMs duration of the smoothing moving-average window in milliseconds (default 50ms)
@@ -21,13 +20,13 @@ class RmsValleyDetector(
     private val smoothingWindowMs: Double = 50.0,
     private val valleyThresholdFactor: Double = 0.05,
     private val minValleyDurationMs: Double = 50.0,
-) : BoundaryDetector {
+) : ValleyDetector {
 
-    override fun detect(
+    override fun detectValleys(
         reader: WavSampleReader,
         windowStart: Double,
         windowEnd: Double,
-    ): List<BoundaryCandidate> {
+    ): List<ValleyInfo> {
         if (windowEnd <= windowStart) return emptyList()
 
         val (left, right) = reader.readSamples(windowStart, windowEnd)
@@ -51,59 +50,17 @@ class RmsValleyDetector(
         val threshold = median * valleyThresholdFactor
         val minValleyFrames = (minValleyDurationMs / frameDurationMs).toInt().coerceAtLeast(1)
         val valleys = findValleys(smoothed, threshold, minValleyFrames)
-        if (valleys.isEmpty()) return emptyList()
 
-        // Step 4: Score valleys and build candidates
-        val windowCenter = (windowEnd - windowStart) / 2.0
+        // Step 4: Convert to ValleyInfo with absolute timestamps
         val frameDurationSec = frameDurationMs / 1000.0
-
         return valleys.map { valley ->
-            val valleyBottomEnergy = valley.bottomEnergy
-            val valleyDurationMs = (valley.endFrame - valley.startFrame) * frameDurationMs
-
-            // Score: energy depth (lower is better)
-            val energyScore = 1.0 - (valleyBottomEnergy / median).coerceIn(0.0, 1.0)
-
-            // Score: duration in preferred range [100ms, 800ms]
-            val durationScore = when {
-                valleyDurationMs < 100.0 -> valleyDurationMs / 100.0
-                valleyDurationMs <= 800.0 -> 1.0
-                else -> (1600.0 - valleyDurationMs).coerceAtLeast(0.0) / 800.0
-            }
-
-            // Score: proximity to window center
-            val valleyCenterSec = (valley.startFrame + valley.endFrame) / 2.0 * frameDurationSec
-            val distance = abs(valleyCenterSec - windowCenter)
-            val proximityScore = if (windowCenter > 0) 1.0 - (distance / windowCenter).coerceIn(0.0, 1.0) else 1.0
-
-            // Weighted combination
-            val score = energyScore * 0.5 + durationScore * 0.2 + proximityScore * 0.3
-
-            // Use valley end as the boundary point (where energy rises above threshold).
-            // For clean Spotify gaps, this approximates the new track's start time.
-            // TransitionDetector uses this for drift calibration, not as the cut point.
-            val timestamp = windowStart + valley.endFrame * frameDurationSec
-
-            // Confidence based on energy contrast
-            val confidence = when {
-                valleyBottomEnergy < median * 0.01 && valleyDurationMs in 100.0..800.0 -> {
-                    0.7 + score * 0.3 // high confidence: 0.7 ~ 1.0
-                }
-                valleyBottomEnergy < median * 0.05 -> {
-                    0.4 + score * 0.3 // medium confidence: 0.4 ~ 0.7
-                }
-                else -> {
-                    score * 0.4 // low confidence: 0.0 ~ 0.4
-                }
-            }
-
-            BoundaryCandidate(
-                timestamp = timestamp,
-                confidence = confidence.coerceIn(0.0, 1.0),
-                source = BoundarySource.RMS_VALLEY,
-                featureDurationMs = valleyDurationMs,
+            ValleyInfo(
+                bottomTime = windowStart + valley.bottomFrame * frameDurationSec,
+                bottomEnergy = valley.bottomEnergy,
+                startTime = windowStart + valley.startFrame * frameDurationSec,
+                endTime = windowStart + valley.endFrame * frameDurationSec,
             )
-        }.sortedByDescending { it.confidence }
+        }
     }
 
     // ── Internal utility functions (visible to tests) ───────────────

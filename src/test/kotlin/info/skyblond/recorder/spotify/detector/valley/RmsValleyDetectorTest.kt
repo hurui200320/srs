@@ -1,9 +1,8 @@
-package info.skyblond.recorder.spotify.detector.boundary
+package info.skyblond.recorder.spotify.detector.valley
 
 import info.skyblond.recorder.spotify.wav.WavSampleReader
 import java.io.File
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.test.Test
@@ -33,11 +32,10 @@ class RmsValleyDetectorTest {
 
     @Test
     fun `rms of full-scale sine wave is approximately 1 over sqrt 2`() {
-        // A full-scale sine has RMS = 1/sqrt(2) ≈ 0.7071
-        val numSamples = 44100 // 1 second = many complete cycles at 440Hz
+        val numSamples = 44100
         val left = sineWave(440.0, numSamples)
         val right = sineWave(440.0, numSamples)
-        val frameSize = 441 // 10ms
+        val frameSize = 441
 
         val rms = detector.computeRmsProfile(left, right, frameSize)
         assertTrue(rms.isNotEmpty())
@@ -50,7 +48,7 @@ class RmsValleyDetectorTest {
 
     @Test
     fun `rms of silence is zero`() {
-        val left = FloatArray(4410) // 100ms of silence
+        val left = FloatArray(4410)
         val right = FloatArray(4410)
         val frameSize = 441
 
@@ -96,10 +94,8 @@ class RmsValleyDetectorTest {
         val values = doubleArrayOf(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
         val smoothed = detector.smooth(values, 5)
 
-        // The spike at index 3 should be reduced
         assertTrue(smoothed[3] < 1.0, "Spike should be reduced")
         assertTrue(smoothed[3] > 0.0, "Spike should not be eliminated")
-        // Neighbors should pick up some energy
         assertTrue(smoothed[2] > 0.0, "Left neighbor should increase")
         assertTrue(smoothed[4] > 0.0, "Right neighbor should increase")
     }
@@ -115,88 +111,72 @@ class RmsValleyDetectorTest {
         }
     }
 
-    // ── detect() Integration Tests ──────────────────────────────────
+    // ── detectValleys() Integration Tests ───────────────────────────
 
     @Test
-    fun `detect clear silence gap`() {
+    fun `detect clear silence gap returns valley`() {
         val reader = WavSampleReader(gapFile("gap_clear.wav"))
-        val candidates = detector.detect(reader, 0.0, reader.duration)
+        val valleys = detector.detectValleys(reader, 0.0, reader.duration)
 
-        assertTrue(candidates.isNotEmpty(), "Should detect at least one boundary")
-        val best = candidates.first()
-        assertTrue(best.confidence > 0.5, "Clear gap should have high confidence, got ${best.confidence}")
+        assertTrue(valleys.isNotEmpty(), "Should detect at least one valley")
+        val v = valleys.first()
+        assertTrue(v.startTime >= 0.0, "Valley startTime should be non-negative")
+        assertTrue(v.endTime > v.startTime, "Valley endTime should be after startTime")
+        assertTrue(v.bottomTime >= v.startTime && v.bottomTime <= v.endTime,
+            "bottomTime should be within valley bounds")
     }
 
     @Test
-    fun `detect short silence gap`() {
+    fun `detect short silence gap returns valley`() {
         val reader = WavSampleReader(gapFile("gap_short.wav"))
-        val candidates = detector.detect(reader, 0.0, reader.duration)
+        val valleys = detector.detectValleys(reader, 0.0, reader.duration)
 
-        assertTrue(candidates.isNotEmpty(), "Should detect at least one boundary in short gap")
+        assertTrue(valleys.isNotEmpty(), "Should detect at least one valley in short gap")
     }
 
     @Test
     fun `detect no gap returns empty`() {
         val reader = WavSampleReader(gapFile("no_gap.wav"))
-        val candidates = detector.detect(reader, 0.0, reader.duration)
+        val valleys = detector.detectValleys(reader, 0.0, reader.duration)
 
-        assertTrue(candidates.isEmpty(), "Continuous tone should produce no candidates")
+        assertTrue(valleys.isEmpty(), "Continuous tone should produce no valleys")
     }
 
     @Test
-    fun `detect quiet non-silent gap`() {
+    fun `detect quiet non-silent gap returns valley`() {
         val reader = WavSampleReader(gapFile("gap_quiet.wav"))
-        val candidates = detector.detect(reader, 0.0, reader.duration)
+        val valleys = detector.detectValleys(reader, 0.0, reader.duration)
 
-        assertTrue(candidates.isNotEmpty(), "Should detect quiet gap")
-        val best = candidates.first()
-        // Quiet gap should have lower confidence than clear silence
-        assertTrue(best.confidence > 0.0, "Should have positive confidence")
+        assertTrue(valleys.isNotEmpty(), "Should detect quiet gap")
     }
 
     @Test
-    fun `detected boundary is near gap end`() {
+    fun `valley bottomTime is within the silence gap`() {
         // gap_clear.wav: 440Hz 0.5s → silence 0.3s → 880Hz 0.5s
-        // timestamp = valley.endFrame ≈ where energy rises ≈ 0.8s (Song B start)
         val reader = WavSampleReader(gapFile("gap_clear.wav"))
-        val candidates = detector.detect(reader, 0.0, reader.duration)
+        val valleys = detector.detectValleys(reader, 0.0, reader.duration)
 
-        assertTrue(candidates.isNotEmpty(), "Should detect boundary")
-        val best = candidates.first()
-        assertTrue(best.timestamp > 0.7, "Valley end should be near Song B start, got ${best.timestamp}")
-        assertTrue(best.timestamp < 0.9, "Valley end should not overshoot, got ${best.timestamp}")
+        assertTrue(valleys.isNotEmpty(), "Should detect valley")
+        val v = valleys.first()
+        assertTrue(v.bottomTime > 0.45, "bottomTime should be after Song A ends, got ${v.bottomTime}")
+        assertTrue(v.bottomTime < 0.85, "bottomTime should be before Song B starts, got ${v.bottomTime}")
     }
 
     @Test
-    fun `candidate source and featureDuration are correct`() {
+    fun `valley bottomEnergy is very low for clear gap`() {
         val reader = WavSampleReader(gapFile("gap_clear.wav"))
-        val candidates = detector.detect(reader, 0.0, reader.duration)
+        val valleys = detector.detectValleys(reader, 0.0, reader.duration)
 
-        assertTrue(candidates.isNotEmpty())
-        for (c in candidates) {
-            assertEquals(BoundarySource.RMS_VALLEY, c.source)
-            assertTrue(c.featureDurationMs > 0.0, "Feature duration should be positive, got ${c.featureDurationMs}")
-        }
-    }
-
-    @Test
-    fun `candidate confidence in valid range`() {
-        val reader = WavSampleReader(gapFile("gap_clear.wav"))
-        val candidates = detector.detect(reader, 0.0, reader.duration)
-
-        assertTrue(candidates.isNotEmpty())
-        for (c in candidates) {
-            assertTrue(c.confidence > 0.0, "Confidence should be positive, got ${c.confidence}")
-            assertTrue(c.confidence <= 1.0, "Confidence should be <= 1.0, got ${c.confidence}")
-        }
+        assertTrue(valleys.isNotEmpty())
+        val v = valleys.first()
+        assertTrue(v.bottomEnergy < 0.01, "Clear gap should have very low bottomEnergy, got ${v.bottomEnergy}")
     }
 
     @Test
     fun `window smaller than one frame returns empty`() {
         val reader = WavSampleReader(gapFile("gap_clear.wav"))
-        // 10ms frame → window of 5ms should be too small
-        val candidates = detector.detect(reader, 0.5, 0.505)
+        val valleys = detector.detectValleys(reader, 0.5, 0.505)
 
-        assertTrue(candidates.isEmpty(), "Tiny window should produce no candidates")
+        assertTrue(valleys.isEmpty(), "Tiny window should produce no valleys")
     }
 }
