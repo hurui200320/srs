@@ -7,13 +7,11 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.double
 import com.github.ajalt.clikt.parameters.types.file
-import info.skyblond.recorder.spotify.detector.boundary.RmsValleyDetector
+import info.skyblond.recorder.spotify.detector.valley.RmsValleyDetector
 import info.skyblond.recorder.spotify.service.ImageDownloadService
 import info.skyblond.recorder.spotify.service.MetadataFetcher
 import info.skyblond.recorder.spotify.service.TrackInfo
-import info.skyblond.recorder.spotify.service.TransitionConfidence
 import info.skyblond.recorder.spotify.service.TransitionDetector
-import info.skyblond.recorder.spotify.tracker.drift.EmaDriftTracker
 import info.skyblond.recorder.spotify.wav.WavSampleReader
 import jakarta.inject.Inject
 import jakarta.inject.Provider
@@ -41,10 +39,6 @@ class SliceCommand @Inject constructor(
         .file(mustExist = false, canBeDir = true, canBeFile = false)
         .required()
 
-    private val initialDrift by option("--initial-drift", help = "Initial drift estimate in seconds")
-        .double()
-        .default(0.0)
-
     private val timestampFile by option("-t", "--timestamps", help = "Timestamp file")
         .file(mustExist = true, canBeDir = false, canBeFile = true)
         .default(File("session_timestamps.txt"))
@@ -57,17 +51,9 @@ class SliceCommand @Inject constructor(
         .file(mustExist = false, canBeDir = false, canBeFile = true)
         .default(File("session_ffmpeg.log"))
 
-    private val searchBefore by option("--search-before", help = "Search window before expected offset (seconds)")
+    private val searchWindow by option("--search-window", help = "Search window radius around expected positions (seconds)")
         .double()
-        .default(1.5)
-
-    private val searchAfter by option("--search-after", help = "Search window after expected offset (seconds)")
-        .double()
-        .default(2.5)
-
-    private val marginSec by option("--margin", help = "Conservative margin before detected onset (seconds)")
-        .double()
-        .default(0.05)
+        .default(10.0)
 
     override fun run() {
         // ── Parse ffmpeg log for recording start time ──
@@ -113,7 +99,7 @@ class SliceCommand @Inject constructor(
                 echo(
                     terminal.theme.warning(
                         "Pre-filter: skipping incomplete track '${track.name}' " +
-                                "(recording time ${actualDuration} < track duration $duration)"
+                                "(recording time $actualDuration < track duration $duration)"
                     )
                 )
             }
@@ -121,11 +107,8 @@ class SliceCommand @Inject constructor(
 
         // ── Run adaptive boundary detection ──
         val transitionDetector = TransitionDetector(
-            detectors = listOf(RmsValleyDetector()),
-            driftTracker = EmaDriftTracker(initialEstimate = initialDrift),
-            searchBefore = searchBefore,
-            searchAfter = searchAfter,
-            margin = marginSec,
+            valleyDetector = RmsValleyDetector(),
+            searchWindow = searchWindow,
         )
         val refinedResults = transitionDetector.refineStartTimes(reader, trackInfos)
         val resultMap = viableIndices.zip(refinedResults).toMap()
@@ -133,7 +116,19 @@ class SliceCommand @Inject constructor(
         // ── Process each track ──
         echo("Processing recording file...")
         startAndTrack.forEachIndexed { index, (start, track) ->
-            val result = resultMap[index] ?: return@forEachIndexed // Already reported during pre-filter
+            if (index !in resultMap) return@forEachIndexed // Skipped during pre-filter
+
+            val result = resultMap[index]
+            if (result == null) {
+                // Valley pairing failed — skip this track
+                echo(
+                    terminal.theme.warning(
+                        "Skipping '${track.name}': could not find valid valley pair. " +
+                                "Try placing non-gapless tracks around this song and re-record."
+                    )
+                )
+                return@forEachIndexed
+            }
 
             val duration = track.durationMs / 1000.0
             val trackName = track.name
@@ -223,23 +218,28 @@ class SliceCommand @Inject constructor(
             )
         }
 
-        // ── Summary of low-confidence detections ──
-        val lowConfidenceTracks = viableIndices.zip(refinedResults)
-            .filter { (_, result) -> result.confidence == TransitionConfidence.LOW }
-        if (lowConfidenceTracks.isNotEmpty()) {
+        // ── Summary of skipped tracks ──
+        val skippedTracks = viableIndices.zip(refinedResults)
+            .filter { (_, result) -> result == null }
+        if (skippedTracks.isNotEmpty()) {
             echo(
                 terminal.theme.warning(
-                    "\n${lowConfidenceTracks.size} track(s) with LOW confidence (recommend manual check):"
+                    "\n${skippedTracks.size} track(s) skipped (no valid valley pair found):"
                 )
             )
-            lowConfidenceTracks.forEach { (originalIndex, result) ->
+            skippedTracks.forEach { (originalIndex, _) ->
                 val track = startAndTrack[originalIndex].second
                 echo(
                     terminal.theme.warning(
-                        "  - ${track.name} (${track.artists.first().name}): ${result.message}"
+                        "  - ${track.name} (${track.artists.first().name})"
                     )
                 )
             }
+            echo(
+                terminal.theme.warning(
+                    "Tip: place non-gapless tracks around these songs and re-record."
+                )
+            )
         }
     }
 
