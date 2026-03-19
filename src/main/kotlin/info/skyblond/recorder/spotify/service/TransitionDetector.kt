@@ -1,19 +1,19 @@
 package info.skyblond.recorder.spotify.service
 
-import info.skyblond.recorder.spotify.detector.boundary.BoundaryDetector
-import info.skyblond.recorder.spotify.tracker.drift.DriftTracker
+import info.skyblond.recorder.spotify.detector.valley.ValleyDetector
+import info.skyblond.recorder.spotify.detector.valley.ValleyInfo
 import info.skyblond.recorder.spotify.wav.WavSampleReader
 import kotlin.math.abs
 
 /**
  * Confidence level assigned to each transition detection result.
  */
-enum class TransitionConfidence { HIGH, MEDIUM, LOW }
+enum class TransitionConfidence { HIGH, MEDIUM }
 
 /**
  * Result of detecting a single track transition.
  *
- * @property cutPoint final start time for ffmpeg `-ss` (seconds), with margin applied
+ * @property cutPoint final start time for ffmpeg `-ss` (seconds)
  * @property confidence confidence level of this detection
  * @property message diagnostic message describing how the decision was made
  */
@@ -35,95 +35,136 @@ data class TrackInfo(
 )
 
 /**
- * Orchestrates adaptive track boundary detection using a DBus-primary approach:
+ * Determines track cut points using a two-point valley search with duration constraint.
  *
- * - **Cut point**: always based on the drift-corrected DBus timestamp, not on audio analysis.
- *   This avoids ambiguity between Spotify inter-track gaps and song-internal silence.
- * - **RMS detection**: used to calibrate drift estimates and to assign confidence.
- *   Only "clean" valleys (short, clearly just a Spotify gap) update the drift tracker.
+ * For each track, searches for a pair of RMS energy valleys (one near the expected start,
+ * one near the expected end) whose spacing matches the Spotify-reported track duration.
+ * The cut point is placed symmetrically between the valley pair, ensuring equal silence
+ * padding before and after the track.
  *
- * @param detectors list of boundary detectors to query for candidates
- * @param driftTracker tracks cumulative drift between DBus timestamps and actual audio
- * @param searchBefore base search window before the expected offset (seconds)
- * @param searchAfter base search window after the expected offset (seconds)
- * @param margin conservative margin subtracted from corrected DBus offset (seconds)
- * @param cleanValleyMaxDurationMs maximum valley duration (ms) to be considered "clean" for drift calibration
- * @param nearbyThresholdSec maximum distance (s) between detected valley and expected position to be considered "nearby"
+ * If no valid valley pair is found, the track is skipped (returns null) rather than
+ * falling back to a potentially inaccurate DBus-based cut.
+ *
+ * @param valleyDetector detects RMS energy valleys in audio windows
+ * @param searchWindow search radius in seconds around the expected start/end positions
+ * @param maxDurationError maximum allowed difference between valley pair spacing
+ *                         and Spotify duration (seconds)
+ * @param w1 scoring weight for duration match accuracy (default 10.0)
+ * @param w2 scoring weight for proximity to DBus-estimated positions (default 1.0)
+ * @param w3 scoring weight for valley depth / energy (default 0.1)
  */
 class TransitionDetector(
-    private val detectors: List<BoundaryDetector>,
-    private val driftTracker: DriftTracker,
-    private val searchBefore: Double = 1.5,
-    private val searchAfter: Double = 2.5,
-    private val margin: Double = 0.03,
-    private val cleanValleyMaxDurationMs: Double = 1000.0,
-    private val nearbyThresholdSec: Double = 2.0,
+    private val valleyDetector: ValleyDetector,
+    private val searchWindow: Double = 10.0,
+    private val maxDurationError: Double = 3.0,
+    private val w1: Double = 10.0,
+    private val w2: Double = 1.0,
+    private val w3: Double = 0.1,
 ) {
     /**
      * Refine the start times for all tracks in a recording session.
      *
-     * Processes tracks sequentially: clean valley detections calibrate the drift tracker,
-     * improving accuracy for subsequent tracks.
+     * Each track is processed independently. Returns null for tracks where
+     * no valid valley pair was found (the caller should skip these tracks).
      *
      * @param reader WAV file reader for the recording
      * @param tracks list of tracks in playback order with DBus offsets and Spotify durations
-     * @return list of [TransitionResult]s, one per track, in the same order
+     * @return list of [TransitionResult]? (nullable), one per track, in the same order
      */
     fun refineStartTimes(
         reader: WavSampleReader,
         tracks: List<TrackInfo>,
-    ): List<TransitionResult> {
-        if (tracks.isEmpty()) return emptyList()
-
+    ): List<TransitionResult?> {
         return tracks.mapIndexed { index, track ->
-            val correctedOffset = track.dbusOffset + driftTracker.estimate
-
-            // Cut point is always based on corrected DBus offset
-            val cutPoint = (correctedOffset - margin).coerceAtLeast(0.0)
-
-            // Determine search window, scaled by drift uncertainty
-            val uncertaintyScale = 1.0 + driftTracker.uncertainty / 5.0
-            val windowStart = (correctedOffset - searchBefore * uncertaintyScale).coerceAtLeast(0.0)
-            val windowEnd = (correctedOffset + searchAfter * uncertaintyScale).coerceAtMost(reader.duration)
-
-            // Query all boundary detectors
-            val candidates = if (windowEnd > windowStart) {
-                detectors.flatMap { it.detect(reader, windowStart, windowEnd) }
-                    .sortedByDescending { it.confidence }
-            } else emptyList()
-
-            val bestCandidate = candidates.firstOrNull()
-
-            // Determine confidence and update drift from clean detections
-            val (confidence, message) = if (bestCandidate != null) {
-                val isClean = bestCandidate.featureDurationMs < cleanValleyMaxDurationMs
-                val isNearby = abs(bestCandidate.timestamp - correctedOffset) < nearbyThresholdSec
-
-                if (isClean && isNearby) {
-                    // Clean valley near expected position → calibrate drift
-                    val driftObservation = bestCandidate.timestamp - track.dbusOffset
-                    driftTracker.update(driftObservation, bestCandidate.confidence)
-
-                    TransitionConfidence.HIGH to
-                            "Track $index: clean valley (${bestCandidate.featureDurationMs.toInt()}ms), drift calibrated"
-                } else if (isNearby) {
-                    // Long valley near expected position → may include song silence, don't calibrate
-                    TransitionConfidence.MEDIUM to
-                            "Track $index: long valley (${bestCandidate.featureDurationMs.toInt()}ms), no drift update"
-                } else {
-                    // Valley far from expected position → unreliable
-                    TransitionConfidence.LOW to
-                            "Track $index: valley too far from expected position (${String.format("%.2f", abs(bestCandidate.timestamp - correctedOffset))}s)"
-                }
-            } else {
-                TransitionConfidence.LOW to "Track $index: no valley detected"
-            }
-
-            TransitionResult(
-                cutPoint = cutPoint,
-                confidence = confidence,
-                message = message,
-            )
+            refineOne(reader, track, index)
         }
+    }
+
+    private fun refineOne(
+        reader: WavSampleReader,
+        track: TrackInfo,
+        trackIndex: Int,
+    ): TransitionResult? {
+        val estimatedStart = track.dbusOffset
+        val estimatedEnd = track.dbusOffset + track.spotifyDurationSec
+        val duration = track.spotifyDurationSec
+
+        // Search windows around estimated start and end
+        val startWindowBegin = (estimatedStart - searchWindow).coerceAtLeast(0.0)
+        val startWindowEnd = (estimatedStart + searchWindow).coerceAtMost(reader.duration)
+        val endWindowBegin = (estimatedEnd - searchWindow).coerceAtLeast(0.0)
+        val endWindowEnd = (estimatedEnd + searchWindow).coerceAtMost(reader.duration)
+
+        // Detect valleys in both windows
+        val startValleys = if (startWindowEnd > startWindowBegin) {
+            valleyDetector.detectValleys(reader, startWindowBegin, startWindowEnd)
+        } else emptyList()
+
+        val endValleys = if (endWindowEnd > endWindowBegin) {
+            valleyDetector.detectValleys(reader, endWindowBegin, endWindowEnd)
+        } else emptyList()
+
+        // Find best valley pair
+        val bestPair = findBestPair(
+            startValleys, endValleys,
+            duration, estimatedStart, estimatedEnd,
+        )
+
+        if (bestPair == null) {
+            return null // Reject: cannot determine cut point
+        }
+
+        val (v1, v2, durationError) = bestPair
+        val totalGap = v2.bottomTime - v1.bottomTime
+        val padding = (totalGap - duration) / 2.0
+        val cutPoint = v1.bottomTime + padding
+
+        val confidence = if (durationError < 1.0) TransitionConfidence.HIGH else TransitionConfidence.MEDIUM
+
+        return TransitionResult(
+            cutPoint = cutPoint,
+            confidence = confidence,
+            message = "Track $trackIndex: paired valleys (error=${String.format("%.3f", durationError)}s, " +
+                    "padding=${String.format("%.3f", padding)}s)",
+        )
+    }
+
+    private data class ScoredPair(
+        val v1: ValleyInfo,
+        val v2: ValleyInfo,
+        val durationError: Double,
+    )
+
+    private fun findBestPair(
+        startValleys: List<ValleyInfo>,
+        endValleys: List<ValleyInfo>,
+        duration: Double,
+        estimatedStart: Double,
+        estimatedEnd: Double,
+    ): ScoredPair? {
+        var bestPair: ScoredPair? = null
+        var bestScore = Double.NEGATIVE_INFINITY
+
+        for (v1 in startValleys) {
+            for (v2 in endValleys) {
+                val gap = v2.bottomTime - v1.bottomTime
+                val durationError = abs(gap - duration)
+
+                if (durationError > maxDurationError) continue
+
+                val scoreDuration = -durationError
+                val scoreProximity = -(abs(v1.bottomTime - estimatedStart) + abs(v2.bottomTime - estimatedEnd))
+                val scoreDepth = -(v1.bottomEnergy + v2.bottomEnergy)
+
+                val score = w1 * scoreDuration + w2 * scoreProximity + w3 * scoreDepth
+
+                if (score > bestScore) {
+                    bestScore = score
+                    bestPair = ScoredPair(v1, v2, durationError)
+                }
+            }
+        }
+
+        return bestPair
     }
 }
