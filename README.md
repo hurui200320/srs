@@ -121,53 +121,34 @@ You should also update the settings in the Spotify Developer Dashboard according
 ./srs slice -o <output_dir> -c <content_dir>
 ```
 
-The slicer uses **adaptive boundary detection** with a DBus-primary approach:
+The slicer uses **two-point valley search** to find precise cut points for each track:
 
-+ **Cut point** is always based on the drift-corrected DBus timestamp.
-  This avoids ambiguity between Spotify inter-track gaps and song-internal silence.
-+ **RMS energy valley detection** calibrates the drift tracker
-  by analyzing silence gaps in the audio. Only short ("clean") valleys update the tracker.
++ For each track, it searches for a pair of RMS energy valleys — one near the expected start,
+  one near the expected end — whose spacing matches the Spotify-reported track duration.
++ The cut point is placed symmetrically between the valley pair, ensuring equal
+  silence padding before and after the track (no cut-head, no cut-tail).
++ Each track is processed independently; errors do not propagate between tracks.
 
-In most cases, the default parameters work well. If you need to fine-tune:
+If the slicer cannot find a valid valley pair for a track (e.g., gapless albums),
+it **skips** that track and prints a warning. You can fix this by placing non-gapless tracks
+around the problematic song in your Spotify playlist and re-recording.
 
-+ `--initial-drift`: Initial drift estimate in seconds (default: `0.0`).
-  This seeds the drift tracker; subsequent tracks are corrected automatically.
-+ `--search-before`: Search window before expected offset in seconds (default: `1.5`).
-+ `--search-after`: Search window after expected offset in seconds (default: `2.5`).
-+ `--margin`: Conservative margin before corrected DBus offset in seconds (default: `0.03`).
+Optional parameter:
+
++ `--search-window`: Search window radius around expected positions in seconds (default: `10.0`).
 
 The command will automatically find the required files in the current directory.
 If you have a different file name or different location for those files,
 check out the help message of the `slice` command to see how to specify them.
 
-When slicing the tracks, the slicer will check both the output directory and the content directory 
+When slicing the tracks, the slicer will check both the output directory and the content directory
 and skip the tracks that have already been sliced (if a file with the same name exists).
 Incomplete tracks (e.g., a song already playing when recording started, or a skipped song)
 are automatically detected and excluded.
 
-After processing, the slicer will report any tracks with **low detection confidence**.
-It's recommended to check those tracks manually.
-
 The slicer will write the track files to the output directory.
 It's highly recommended to go through the tracks one by one and check if the song ends correctly.
 Then you may move them to the content directory, so next time the slicer will skip them.
-
-#### Adjusting cuts with `--margin`
-
-If you find that some tracks have their beginning cut off or their ending bleeds into the next track,
-you can adjust the `--margin` parameter and re-slice:
-
-1. Delete the problematic files from the output directory.
-2. Re-run the slicer with a larger `--margin` value (e.g., `--margin 0.3`).
-3. The slicer will skip files that already exist and only re-process the deleted ones.
-
-A larger margin moves **all** cut points earlier, which means:
-+ More silence at the beginning of each track (usually inaudible).
-+ Less chance of cutting off the beginning.
-+ The end of each track also shifts earlier, reducing the chance of bleeding into the next track.
-
-If you only need to fix a few specific tracks, delete only those files and re-run with the adjusted margin.
-The existing (correctly sliced) files will be skipped automatically.
 
 ## Notes
 

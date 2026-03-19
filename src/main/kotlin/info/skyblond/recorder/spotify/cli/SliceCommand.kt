@@ -122,7 +122,7 @@ class SliceCommand @Inject constructor(
             if (result == null) {
                 // Valley pairing failed — skip this track
                 echo(
-                    terminal.theme.warning(
+                    terminal.theme.danger(
                         "Skipping '${track.name}': could not find valid valley pair. " +
                                 "Try placing non-gapless tracks around this song and re-record."
                     )
