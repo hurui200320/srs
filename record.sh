@@ -1,10 +1,14 @@
 #!/bin/bash
 set -e
 
+# srs path for check
+SRS_PATH="./build/install/srs/srs"
+# content on my NAS
+CONTENT_FOLDER="/run/user/1000/gvfs/smb-share:server=100.99.241.120,share=media/music/spotify-rip"
+
 RECORD_FILE="session_record.wav"
 LOG_FILE="session_timestamps.txt"
 FFMPEG_LOG_FILE="session_ffmpeg.log"
-
 
 # output log to ./ffmpeg.log, this will include the start timestamp
 PULSE_LATENCY_MSEC=180 ffmpeg -y \
@@ -50,7 +54,14 @@ playerctl -p spotify metadata -F --format '{{ mpris:trackid }}|{{ status }}' | w
         continue
     fi
 
-    # TODO: check if the content already downloaded?
+    # skip to next if the current content is already there
+    EXIST=$("$SRS_PATH" check --id "$CLEAN_ID" -f "$CONTENT_FOLDER")
+    if [ "$EXIST" = "Already exists." ]; then
+        echo "$CLEAN_ID exists, skip..."
+        sleep 5
+        playerctl -p spotify next
+        continue
+    fi
 
     echo "$NOW,$CLEAN_ID,$STATUS"
 

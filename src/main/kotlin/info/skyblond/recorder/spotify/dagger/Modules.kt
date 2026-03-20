@@ -4,6 +4,7 @@ import com.github.ajalt.clikt.core.CliktCommand
 import dagger.Binds
 import dagger.Module
 import dagger.multibindings.IntoSet
+import info.skyblond.recorder.spotify.cli.CheckCommand
 import info.skyblond.recorder.spotify.cli.InitCommand
 import info.skyblond.recorder.spotify.cli.LoginCommand
 import info.skyblond.recorder.spotify.cli.SliceCommand
@@ -22,4 +23,8 @@ interface SubCommandsModule {
     @Binds
     @IntoSet
     fun sliceCommand(command: SliceCommand): CliktCommand
+
+    @Binds
+    @IntoSet
+    fun checkCommand(command: CheckCommand): CliktCommand
 }
