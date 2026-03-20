@@ -17,7 +17,6 @@ import jakarta.inject.Inject
 import jakarta.inject.Provider
 import net.bramp.ffmpeg.FFmpegExecutor
 import net.bramp.ffmpeg.builder.FFmpegBuilder
-import se.michaelthelin.spotify.model_objects.specification.Track
 import java.io.File
 import kotlin.math.abs
 
@@ -35,8 +34,10 @@ class SliceCommand @Inject constructor(
         .file(mustExist = false, canBeDir = true, canBeFile = false)
         .required()
 
-    private val contentFolder by option("-c", "--content", help = "Content folder for existing library")
-        .file(mustExist = false, canBeDir = true, canBeFile = false)
+    private val contentFolder by option(
+        "-c", "--content",
+        help = "Content folder for existing library"
+    ).file(mustExist = false, canBeDir = true, canBeFile = false)
         .required()
 
     private val timestampFile by option("-t", "--timestamps", help = "Timestamp file")
@@ -51,13 +52,17 @@ class SliceCommand @Inject constructor(
         .file(mustExist = false, canBeDir = false, canBeFile = true)
         .default(File("session_ffmpeg.log"))
 
-    private val searchWindow by option("--search-window", help = "Search window radius around expected positions (seconds)")
-        .double()
+    private val searchWindow by option(
+        "--search-window",
+        help = "Search window radius around expected positions (seconds)"
+    ).double()
         .default(10.0)
 
-    private val marginSec by option("--margin", help = "Shift cut points earlier by this amount (seconds). " +
-            "Default 0 (no adjustment). Increase to fix tracks where the automatic detection cuts too late.")
-        .double()
+    private val marginSec by option(
+        "--margin",
+        help = "Shift cut points earlier by this amount (seconds). " +
+                "Default 0 (no adjustment). Increase to fix tracks where the automatic detection cuts too late."
+    ).double()
         .default(0.0)
 
     override fun run() {
@@ -138,7 +143,7 @@ class SliceCommand @Inject constructor(
 
             val duration = track.durationMs / 1000.0
             val trackName = track.name
-            val artistsStr = track.artists.joinToString(", ") { it.name }
+            val artistsStr = track.artists.joinToString("; ") { it.name }
             val albumName = track.album.name
             val albumImageUrl = track.album.images.maxByOrNull { it.height }?.url!!
             val diskNumber = track.discNumber // start with 1
@@ -164,7 +169,9 @@ class SliceCommand @Inject constructor(
             echo(terminal.theme.info("Refined start: $ss (${result.confidence})"))
             echo(terminal.theme.info("Detection: ${result.message}"))
 
-            val contentFile = getMusicFile(contentFolder, albumName, track, diskNumber, trackNumber, trackName)
+            val contentFile = getMusicFile(
+                contentFolder, albumName, track, diskNumber, trackNumber, trackName
+            )
             if (contentFile.exists()) {
                 echo(
                     terminal.theme.warning(
@@ -174,7 +181,9 @@ class SliceCommand @Inject constructor(
                 return@forEachIndexed
             }
 
-            val outputFile = getMusicFile(outputFolder, albumName, track, diskNumber, trackNumber, trackName)
+            val outputFile = getMusicFile(
+                outputFolder, albumName, track, diskNumber, trackNumber, trackName
+            )
             outputFile.parentFile.mkdirs()
 
             if (outputFile.exists()) {
@@ -248,14 +257,4 @@ class SliceCommand @Inject constructor(
             )
         }
     }
-
-    private fun getMusicFile(
-        folder: File, albumName: String, track: Track, diskNumber: Int, trackNumber: Int, trackName: String
-    ) = File(
-        File(
-            File(folder, "$albumName (${track.album.artists.first().name})".replace("/", "-")),
-            "Disk $diskNumber"
-        ),
-        "$trackNumber. ${trackName.replace("/", "-")}.flac"
-    )
 }

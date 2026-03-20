@@ -119,6 +119,8 @@ You should also update the settings in the Spotify Developer Dashboard according
 
 ```shell
 ./srs slice -o <output_dir> -c <content_dir>
+# my use case with my nas
+# srs slice -o /home/skyblond/音乐/temp -c /run/user/1000/gvfs/smb-share:server=100.99.241.120,share=media/music/spotify-rip
 ```
 
 The slicer uses **two-point valley search** to find precise cut points for each track:

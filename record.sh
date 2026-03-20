@@ -50,6 +50,8 @@ playerctl -p spotify metadata -F --format '{{ mpris:trackid }}|{{ status }}' | w
         continue
     fi
 
+    # TODO: check if the content already downloaded?
+
     echo "$NOW,$CLEAN_ID,$STATUS"
 
     if [ "$CLEAN_ID" != "$LAST_ID" ] && [ "$STATUS" == "Playing" ]; then
