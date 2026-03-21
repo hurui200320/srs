@@ -31,6 +31,7 @@ cleanup() {
         kill -SIGTERM "$FFMPEG_PID" 2>/dev/null
         wait "$FFMPEG_PID"
     fi
+    playerctl -p spotify pause
 }
 
 trap 'cleanup' SIGINT SIGTERM
@@ -54,18 +55,24 @@ playerctl -p spotify metadata -F --format '{{ mpris:trackid }}|{{ status }}' | w
         continue
     fi
 
+    if [ "$STATUS" != "Playing" ]; then
+        # only process playing
+        continue
+    fi
+
     # skip to next if the current content is already there
     EXIST=$("$SRS_PATH" check --id "$CLEAN_ID" -f "$CONTENT_FOLDER")
     if [ "$EXIST" = "Already exists." ]; then
         echo "$CLEAN_ID exists, skip..."
-        sleep 5
+        sleep 4
+        playerctl -p spotify pause
+        sleep 1
         playerctl -p spotify next
         continue
     fi
 
     echo "$NOW,$CLEAN_ID,$STATUS"
-
-    if [ "$CLEAN_ID" != "$LAST_ID" ] && [ "$STATUS" == "Playing" ]; then
+    if [ "$CLEAN_ID" != "$LAST_ID" ]; then
         # record log on playing
         echo "$NOW,$CLEAN_ID" >> "$LOG_FILE"
         LAST_ID="$CLEAN_ID"

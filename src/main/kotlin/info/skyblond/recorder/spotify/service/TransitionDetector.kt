@@ -3,12 +3,13 @@ package info.skyblond.recorder.spotify.service
 import info.skyblond.recorder.spotify.detector.valley.ValleyDetector
 import info.skyblond.recorder.spotify.detector.valley.ValleyInfo
 import info.skyblond.recorder.spotify.wav.WavSampleReader
+import se.michaelthelin.spotify.model_objects.specification.Track
 import kotlin.math.abs
 
 /**
  * Confidence level assigned to each transition detection result.
  */
-enum class TransitionConfidence { HIGH, MEDIUM }
+enum class TransitionConfidence { HIGH, LOW }
 
 /**
  * Result of detecting a single track transition.
@@ -50,20 +51,17 @@ data class TrackInfo(
  * @param margin user-adjustable offset subtracted from the computed cut point (seconds).
  *               Default 0.0 (no adjustment). Increase to shift all cuts earlier when
  *               the automatic detection produces unsatisfactory results for specific tracks.
- * @param maxDurationError maximum allowed difference between valley pair spacing
- *                         and Spotify duration (seconds)
  * @param w1 scoring weight for duration match accuracy (default 10.0)
- * @param w2 scoring weight for proximity to DBus-estimated positions (default 1.0)
+ * @param w2 scoring weight for proximity to DBus-estimated positions (default 2.0)
  * @param w3 scoring weight for valley depth / energy (default 0.1)
  */
 class TransitionDetector(
     private val valleyDetector: ValleyDetector,
     private val searchWindow: Double = 10.0,
     private val margin: Double = 0.0,
-    private val maxDurationError: Double = 3.0,
     private val w1: Double = 10.0,
-    private val w2: Double = 1.0,
-    private val w3: Double = 0.1,
+    private val w2: Double = 2.0,
+    private val w3: Double = 0.5,
 ) {
     /**
      * Refine the start times for all tracks in a recording session.
@@ -123,13 +121,20 @@ class TransitionDetector(
         // but ensure the end (cutPoint + D) does not exceed bottom + some duration (postBottomTime)
         // clamp this duration to at most 1s in case of a long silence,
         // otherwise just use the middle point between bottom and end
-        val postBottomTime = minOf((v2.endTime - v2.bottomTime) / 2, 1.0)
-        val rawCutPoint = maxOf(v1.bottomTime, v2.bottomTime + postBottomTime - duration)
+        val postBottomTime = minOf((v2.endTime - v2.bottomTime) / 2, 2.0)
+        val rawCutPoint = maxOf(
+            v1.bottomTime, v2.bottomTime + postBottomTime - duration
+        ).coerceAtMost(
+            v1.endTime - minOf(
+                // 300ms, or half of the valley
+                0.3, (v1.endTime - v1.bottomTime) / 2
+            )
+        )
         val cutPoint = rawCutPoint - margin
 
         val confidence =
             if (durationError < 1.0) TransitionConfidence.HIGH
-            else TransitionConfidence.MEDIUM
+            else TransitionConfidence.LOW
 
         return TransitionResult(
             cutPoint = cutPoint,
@@ -158,8 +163,6 @@ class TransitionDetector(
             for (v2 in endValleys) {
                 val gap = v2.bottomTime - v1.bottomTime
                 val durationError = abs(gap - duration)
-
-                if (durationError > maxDurationError) continue
 
                 val scoreDuration = -durationError
                 val scoreProximity =

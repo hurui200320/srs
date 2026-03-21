@@ -12,7 +12,7 @@ import kotlin.math.sqrt
  *
  * @param frameDurationMs duration of each analysis frame in milliseconds (default 10ms)
  * @param smoothingWindowMs duration of the smoothing moving-average window in milliseconds (default 50ms)
- * @param valleyThresholdFactor valley threshold as a fraction of the median RMS energy (default 0.05)
+ * @param valleyThresholdFactor valley threshold as a fraction of the median RMS energy (default 0.01)
  * @param minValleyDurationMs minimum valley duration in milliseconds to be considered (default 50ms)
  */
 class RmsValleyDetector(

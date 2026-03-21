@@ -5,7 +5,6 @@ import info.skyblond.recorder.spotify.detector.valley.ValleyInfo
 import info.skyblond.recorder.spotify.wav.WavSampleReader
 import io.mockk.every
 import io.mockk.mockk
-import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -232,7 +231,7 @@ class TransitionDetectorTest {
             tracks = listOf(TrackInfo(dbusOffset = 10.0, spotifyDurationSec = 100.0)),
         )
 
-        assertEquals(TransitionConfidence.MEDIUM, results[0]?.confidence)
+        assertEquals(TransitionConfidence.LOW, results[0]?.confidence)
     }
 
     // ── Multi-track independence ─────────────────────────────────────

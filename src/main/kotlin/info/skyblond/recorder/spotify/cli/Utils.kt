@@ -6,6 +6,7 @@ import java.io.File
 fun String.sanitizeAsFilename() = this
     .replace("/", " ")
     .replace(":", " ")
+    .replace("\"", "_")
 
 fun getMusicFile(
     folder: File,

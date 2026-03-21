@@ -77,6 +77,7 @@ class SliceCommand @Inject constructor(
         echo("Reading recording file...")
         val reader = WavSampleReader(recordingFile)
         val recordingDuration = reader.duration
+        echo(terminal.theme.info("Recording duration: ${recordingDuration.toInt()} seconds"))
 
         // ── Parse timestamps ──
         echo("Processing timestamps...")
@@ -102,7 +103,8 @@ class SliceCommand @Inject constructor(
             val nextStart = startAndTrack.getOrNull(index + 1)?.first ?: recordingDuration
             val duration = track.durationMs / 1000.0
             val actualDuration = nextStart - start
-            if (abs(actualDuration - duration) <= 2.5) {
+            val difference = abs(actualDuration - duration)
+            if (actualDuration >= duration || difference <= 3) {
                 viableIndices.add(index)
                 trackInfos.add(TrackInfo(dbusOffset = start, spotifyDurationSec = duration))
             } else {
