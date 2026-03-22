@@ -48,10 +48,6 @@ class SliceCommand @Inject constructor(
         .file(mustExist = true, canBeDir = false, canBeFile = true)
         .default(File("session_record.wav"))
 
-    private val ffmpegLogFile by option("-l", "--ffmpeg-log", help = "FFMpeg log file")
-        .file(mustExist = false, canBeDir = false, canBeFile = true)
-        .default(File("session_ffmpeg.log"))
-
     private val searchWindow by option(
         "--search-window",
         help = "Search window radius around expected positions (seconds)"
@@ -68,10 +64,7 @@ class SliceCommand @Inject constructor(
     override fun run() {
         // ── Parse ffmpeg log for recording start time ──
         echo("Load ffmpeg logs...")
-        val startRecordingTime = ffmpegLogFile.readLines()
-            .filter { it.contains("Duration: N/A, start: ") }
-            .apply { require(size == 1) { "Cannot find start time in ffmpeg log" } }
-            .first().split("start: ")[1].split(",")[0].trim().toDouble()
+        val startRecordingTime = timestampFile.readLines().take(1).first().toDouble()
 
         // ── Read recording file ──
         echo("Reading recording file...")
@@ -81,7 +74,7 @@ class SliceCommand @Inject constructor(
 
         // ── Parse timestamps ──
         echo("Processing timestamps...")
-        val startAndTrackIds = timestampFile.readLines().map {
+        val startAndTrackIds = timestampFile.readLines().drop(1).map {
             val arr = it.split(",")
             val timestamp = arr[0].toDouble()
             val trackId = arr[1].trim()
@@ -132,16 +125,7 @@ class SliceCommand @Inject constructor(
             if (index !in resultMap) return@forEachIndexed // Skipped during pre-filter
 
             val result = resultMap[index]
-            if (result == null) {
-                // Valley pairing failed — skip this track
-                echo(
-                    terminal.theme.danger(
-                        "Skipping '${track.name}': could not find valid valley pair. " +
-                                "Try placing non-gapless tracks around this song and re-record."
-                    )
-                )
-                return@forEachIndexed
-            }
+            val ss = result?.cutPoint ?: (start - marginSec)
 
             val duration = track.durationMs / 1000.0
             val trackName = track.name
@@ -159,7 +143,6 @@ class SliceCommand @Inject constructor(
             echo(terminal.theme.info("Spotify track id: ${track.id}"))
 
             // Safety check: enough recording remaining for this track
-            val ss = result.cutPoint
             if (ss + duration > recordingDuration) {
                 echo(
                     terminal.theme.warning("Not enough recording remaining for track: $trackName")
@@ -168,8 +151,10 @@ class SliceCommand @Inject constructor(
             }
 
             echo(terminal.theme.info("DBus recorded start: $start"))
-            echo(terminal.theme.info("Refined start: $ss (${result.confidence})"))
-            echo(terminal.theme.info("Detection: ${result.message}"))
+            if (result != null) {
+                echo(terminal.theme.info("Refined start: $ss (${result.confidence})"))
+                echo(terminal.theme.info("Detection: ${result.message}"))
+            }
 
             val contentFile = getMusicFile(
                 contentFolder, albumName, track, diskNumber, trackNumber, trackName
@@ -241,22 +226,18 @@ class SliceCommand @Inject constructor(
         if (skippedTracks.isNotEmpty()) {
             echo(
                 terminal.theme.warning(
-                    "\n${skippedTracks.size} track(s) skipped (no valid valley pair found):"
+                    "\n${skippedTracks.size} track(s) with no valid valley pair found " +
+                            "(cut based on dbus time):"
                 )
             )
             skippedTracks.forEach { (originalIndex, _) ->
                 val track = startAndTrack[originalIndex].second
                 echo(
                     terminal.theme.warning(
-                        "  - ${track.name} (${track.artists.first().name})"
+                        "  - ${track.name} (${track.album.name} - ${track.artists.first().name})"
                     )
                 )
             }
-            echo(
-                terminal.theme.warning(
-                    "Tip: place non-gapless tracks around these songs and re-record."
-                )
-            )
         }
     }
 }

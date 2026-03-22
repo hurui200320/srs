@@ -7,6 +7,7 @@ fun String.sanitizeAsFilename() = this
     .replace("/", " ")
     .replace(":", " ")
     .replace("\"", "_")
+    .replace("?", "_")
 
 fun getMusicFile(
     folder: File,

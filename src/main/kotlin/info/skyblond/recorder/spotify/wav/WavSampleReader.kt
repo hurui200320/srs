@@ -168,7 +168,9 @@ class WavSampleReader(private val file: File) {
         blockAlign = parsedBlockAlign!!
         dataChunkOffset = parsedDataOffset
             ?: throw IllegalArgumentException("WAV file missing data chunk")
-        dataChunkSize = parsedDataSize!!
+        // Clamp to actual available data (handles unfinalized WAV headers
+        // where the data chunk size may be a placeholder like 0xFFFFFFFF)
+        dataChunkSize = min(parsedDataSize!!, file.length() - dataChunkOffset)
 
         // Validate supported configurations
         require(numChannels == 2) {
@@ -188,7 +190,10 @@ class WavSampleReader(private val file: File) {
         }
 
         bytesPerSample = bitsPerSample / 8
-        duration = dataChunkSize.toDouble() / (sampleRate.toLong() * numChannels * bytesPerSample)
+        require(blockAlign >= numChannels * bytesPerSample) {
+            "Invalid WAV: blockAlign ($blockAlign) < numChannels * bytesPerSample (${numChannels * bytesPerSample})"
+        }
+        duration = dataChunkSize.toDouble() / (sampleRate.toLong() * blockAlign)
     }
 
     /**
@@ -214,9 +219,9 @@ class WavSampleReader(private val file: File) {
 
         val startSample = floor(startTime * sampleRate).toLong()
         val endSample = floor(endTime * sampleRate).toLong()
-        // Clamp to actual data boundary
-        val totalSamplesInFile = dataChunkSize / (numChannels * bytesPerSample)
-        val clampedEndSample = min(endSample, totalSamplesInFile)
+        // Clamp to actual data boundary (frame count = data bytes / blockAlign)
+        val totalFramesInFile = dataChunkSize / blockAlign
+        val clampedEndSample = min(endSample, totalFramesInFile)
         val numSamples = (clampedEndSample - startSample).toInt()
 
         if (numSamples <= 0) {
@@ -226,21 +231,21 @@ class WavSampleReader(private val file: File) {
         val left = FloatArray(numSamples)
         val right = FloatArray(numSamples)
 
-        val bytesPerFrame = numChannels * bytesPerSample
-        val seekPosition = dataChunkOffset + startSample * bytesPerFrame
+        val seekPosition = dataChunkOffset + startSample * blockAlign
+        val paddingBytesPerFrame = blockAlign - numChannels * bytesPerSample
 
         RandomAccessFile(file, "r").use { raf ->
             raf.seek(seekPosition)
 
             // Read in chunks to avoid allocating a huge byte array
             val bufferFrames = 4096
-            val bufferBytes = ByteArray(bufferFrames * bytesPerFrame)
+            val bufferBytes = ByteArray(bufferFrames * blockAlign)
             var samplesRead = 0
 
             while (samplesRead < numSamples) {
                 val remaining = numSamples - samplesRead
                 val framesToRead = min(remaining, bufferFrames)
-                val bytesNeeded = framesToRead * bytesPerFrame
+                val bytesNeeded = framesToRead * blockAlign
                 raf.readFully(bufferBytes, 0, bytesNeeded)
 
                 val buf = ByteBuffer.wrap(bufferBytes, 0, bytesNeeded)
@@ -249,6 +254,9 @@ class WavSampleReader(private val file: File) {
                 for (i in 0 until framesToRead) {
                     left[samplesRead + i] = readOneSample(buf)
                     right[samplesRead + i] = readOneSample(buf)
+                    if (paddingBytesPerFrame > 0) {
+                        buf.position(buf.position() + paddingBytesPerFrame)
+                    }
                 }
                 samplesRead += framesToRead
             }

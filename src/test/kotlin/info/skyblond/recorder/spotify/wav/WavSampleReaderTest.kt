@@ -1,6 +1,9 @@
 package info.skyblond.recorder.spotify.wav
 
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.floor
@@ -31,6 +34,47 @@ class WavSampleReaderTest {
         private val s24leStereo = resourceFile("sine_s24le_stereo.wav")
         private val s32leStereo = resourceFile("sine_s32le_stereo.wav")
         private val dualTone = resourceFile("dual_tone_f32le_stereo.wav")
+
+        /**
+         * Create a minimal f32le stereo WAV file where the data chunk size
+         * in the header is set to [headerDataSize] but the actual audio data
+         * written is [actualFrames] frames of silence.
+         */
+        private fun createWavWithFakeDataSize(
+            targetFile: File,
+            actualFrames: Int = 4410, // 0.1s at 44100 Hz
+            headerDataSize: Int = -1, // -1 → unsigned 0xFFFFFFFF
+        ) {
+            val sampleRate = 44100
+            val numChannels = 2
+            val bitsPerSample = 32
+            val blockAlign = numChannels * (bitsPerSample / 8) // 8
+            val actualDataSize = actualFrames * blockAlign
+
+            RandomAccessFile(targetFile, "rw").use { raf ->
+                val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+                // RIFF header
+                header.put("RIFF".toByteArray(Charsets.US_ASCII))
+                header.putInt(36 + actualDataSize) // RIFF size (not critical for this test)
+                header.put("WAVE".toByteArray(Charsets.US_ASCII))
+                // fmt chunk
+                header.put("fmt ".toByteArray(Charsets.US_ASCII))
+                header.putInt(16) // fmt chunk size
+                header.putShort(3) // IEEE float
+                header.putShort(numChannels.toShort())
+                header.putInt(sampleRate)
+                header.putInt(sampleRate * blockAlign) // byte rate
+                header.putShort(blockAlign.toShort())
+                header.putShort(bitsPerSample.toShort())
+                // data chunk
+                header.put("data".toByteArray(Charsets.US_ASCII))
+                header.putInt(headerDataSize) // deliberately wrong
+
+                raf.write(header.array())
+                // Write actual audio data (silence)
+                raf.write(ByteArray(actualDataSize))
+            }
+        }
     }
 
     // ── Header Parsing ──────────────────────────────────────────────
@@ -248,5 +292,51 @@ class WavSampleReaderTest {
             assertEquals(wavLeft[i], rf64Left[i], 0.0f, "Left sample $i differs")
             assertEquals(wavRight[i], rf64Right[i], 0.0f, "Right sample $i differs")
         }
+    }
+
+    // ── Unfinalized Header (dataChunkSize clamping) ─────────────────
+
+    @Test
+    fun `oversized data chunk size is clamped to actual file size`() {
+        val tempFile = File.createTempFile("test_oversized_header", ".wav")
+        tempFile.deleteOnExit()
+
+        // 4410 frames = 0.1s, but header says 0xFFFFFFFF bytes
+        createWavWithFakeDataSize(tempFile, actualFrames = 4410, headerDataSize = -1)
+
+        val reader = WavSampleReader(tempFile)
+        // Duration should reflect actual data, not the fake header
+        val expectedDuration = 4410.0 / 44100.0 // 0.1s
+        assertEquals(expectedDuration, reader.duration, 0.001, "Duration should be clamped to actual data")
+        // dataChunkSize should be clamped: actual data = 4410 * 8 = 35280
+        assertEquals(35280L, reader.dataChunkSize, "dataChunkSize should be clamped")
+    }
+
+    @Test
+    fun `readSamples works with oversized header - no EOFException`() {
+        val tempFile = File.createTempFile("test_oversized_read", ".wav")
+        tempFile.deleteOnExit()
+
+        createWavWithFakeDataSize(tempFile, actualFrames = 4410, headerDataSize = -1)
+
+        val reader = WavSampleReader(tempFile)
+        // Should be able to read the full (clamped) duration without EOFException
+        val (left, right) = reader.readSamples(0.0, reader.duration)
+        assertEquals(4410, left.size, "Should read all actual frames")
+        assertEquals(4410, right.size, "Should read all actual frames")
+    }
+
+    @Test
+    fun `correct header is not affected by clamping`() {
+        val tempFile = File.createTempFile("test_correct_header", ".wav")
+        tempFile.deleteOnExit()
+
+        val actualFrames = 4410
+        val correctDataSize = actualFrames * 8 // 35280
+        createWavWithFakeDataSize(tempFile, actualFrames = actualFrames, headerDataSize = correctDataSize)
+
+        val reader = WavSampleReader(tempFile)
+        assertEquals(4410.0 / 44100.0, reader.duration, 0.001)
+        assertEquals(correctDataSize.toLong(), reader.dataChunkSize)
     }
 }

@@ -60,9 +60,10 @@ class TransitionDetectorTest {
         val result = results[0]
         assertNotNull(result)
         // Best pair: (99.5, 299.8), v2.end=299.95
-        // postBottomTime = min((299.95-299.8)/2, 1.0) = 0.075
+        // postBottomTime = min((299.95-299.8)/2, 2.0) = 0.075
         // rawCutPoint = max(99.5, 299.8+0.075-200) = max(99.5, 99.875) = 99.875
-        assertEquals(99.875, result.cutPoint, 0.05)
+        // coerceAtMost: v1.end - min(0.3, (99.65-99.5)/2) = 99.65 - 0.075 = 99.575
+        assertEquals(99.575, result.cutPoint, 0.05)
         assertEquals(TransitionConfidence.HIGH, result.confidence) // error 0.3 < 1.0
     }
 
@@ -70,8 +71,10 @@ class TransitionDetectorTest {
     fun `minimize leading silence with postBottomTime`() {
         // Song: duration=100s. Valleys at 10.0 and 110.5
         // v2.end = 110.65 (valley helper adds ±0.15)
-        // postBottomTime = min((110.65-110.5)/2, 1.0) = 0.075
+        // postBottomTime = min((110.65-110.5)/2, 2.0) = 0.075
         // rawCutPoint = max(10.0, 110.5+0.075-100) = max(10.0, 10.575) = 10.575
+        // coerceAtMost: v1.end - min(0.3, (10.15-10.0)/2) = 10.15 - 0.075 = 10.075
+        // final rawCutPoint = min(10.575, 10.075) = 10.075
         val mockDetector = mockk<ValleyDetector> {
             every { detectValleys(any(), any(), any()) } answers {
                 val winStart = secondArg<Double>()
@@ -87,7 +90,7 @@ class TransitionDetectorTest {
 
         val result = results[0]
         assertNotNull(result)
-        assertEquals(10.575, result.cutPoint, 0.01)
+        assertEquals(10.075, result.cutPoint, 0.01)
     }
 
     @Test
@@ -113,11 +116,12 @@ class TransitionDetectorTest {
         assertEquals(10.075, result.cutPoint, 0.01)
     }
 
-    // ── Duration constraint filtering ───────────────────────────────
+    // ── Scoring-based selection ─────────────────────────────────────
 
     @Test
-    fun `pairs exceeding maxDurationError are rejected`() {
-        // Song: duration=100s. Valleys at 10.0 and 115.0 → gap=105, error=5 > default max 3
+    fun `large duration error still returns result`() {
+        // Song: duration=100s. Valleys at 10.0 and 115.0 → gap=105, error=5
+        // No hard maxDurationError filter — scoring selects the best (only) pair
         val mockDetector = mockk<ValleyDetector> {
             every { detectValleys(any(), any(), any()) } answers {
                 val winStart = secondArg<Double>()
@@ -131,16 +135,18 @@ class TransitionDetectorTest {
             tracks = listOf(TrackInfo(dbusOffset = 10.0, spotifyDurationSec = 100.0)),
         )
 
-        assertNull(results[0], "Should reject pair with duration error > maxDurationError")
+        val result = results[0]
+        assertNotNull(result, "Should return result even with large duration error (no hard filtering)")
+        assertEquals(TransitionConfidence.LOW, result.confidence)
     }
 
     @Test
-    fun `song-internal pause is filtered by duration constraint`() {
+    fun `song-internal pause is deprioritized by scoring`() {
         // Song: duration=200s, dbus=100
-        // Start window: valley at 100.0 (correct gap)
-        // End window: valleys at 297.0 (song internal pause, gap=197, error=3 → borderline)
-        //             and 300.0 (correct gap, gap=200, error=0)
-        // Should pick (100.0, 300.0) not (100.0, 297.0)
+        // Start window: valley at 100.0
+        // End window: valleys at 297.0 (song internal pause, gap=197, error=3)
+        //             and 300.0 (correct transition, gap=200, error=0)
+        // Scoring (w1=10) heavily penalizes duration error → picks (100.0, 300.0)
         val mockDetector = mockk<ValleyDetector> {
             every { detectValleys(any(), any(), any()) } answers {
                 val winStart = secondArg<Double>()
@@ -178,13 +184,13 @@ class TransitionDetectorTest {
     }
 
     @Test
-    fun `valleys exist but no valid pair returns null`() {
-        // Start valley at 10.0, end valley at 150.0 → gap=140, error=40 >> maxDurationError
+    fun `only start valleys found returns null`() {
+        // Valleys in start window, but none in end window → no pair possible
         val mockDetector = mockk<ValleyDetector> {
             every { detectValleys(any(), any(), any()) } answers {
                 val winStart = secondArg<Double>()
                 if (winStart < 50.0) listOf(valley(10.0))
-                else listOf(valley(150.0))
+                else emptyList()
             }
         }
         val detector = TransitionDetector(valleyDetector = mockDetector)
@@ -193,7 +199,7 @@ class TransitionDetectorTest {
             tracks = listOf(TrackInfo(dbusOffset = 10.0, spotifyDurationSec = 100.0)),
         )
 
-        assertNull(results[0], "Should return null when no pair matches duration")
+        assertNull(results[0], "Should return null when end window has no valleys")
     }
 
     // ── Confidence levels ───────────────────────────────────────────
@@ -217,7 +223,7 @@ class TransitionDetectorTest {
     }
 
     @Test
-    fun `duration error between 1s and maxDurationError gives MEDIUM confidence`() {
+    fun `duration error above 1s gives LOW confidence`() {
         val mockDetector = mockk<ValleyDetector> {
             every { detectValleys(any(), any(), any()) } answers {
                 val winStart = secondArg<Double>()
