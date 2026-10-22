@@ -7,6 +7,7 @@ import dagger.multibindings.IntoSet
 import info.skyblond.recorder.spotify.cli.CheckCommand
 import info.skyblond.recorder.spotify.cli.InitCommand
 import info.skyblond.recorder.spotify.cli.LoginCommand
+import info.skyblond.recorder.spotify.cli.LogoutCommand
 import info.skyblond.recorder.spotify.cli.SliceCommand
 import jakarta.inject.Named
 
@@ -19,6 +20,10 @@ interface SubCommandsModule {
     @Binds
     @IntoSet
     fun loginCommand(command: LoginCommand): CliktCommand
+
+    @Binds
+    @IntoSet
+    fun logoutCommand(command: LogoutCommand): CliktCommand
 
     @Binds
     @IntoSet

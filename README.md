@@ -108,6 +108,15 @@ If everything goes well, you should be redirected to `http://127.0.0.1:3000/`,
 and it will tell you log in is successful, and you can close the tab safely.
 Meanwhile, in the console, it will also tell you the login is done.
 
+### Logout / re-login
+
+If the stored refresh token is invalid or revoked, clear it before logging in again:
+
+```shell
+./srs logout
+./srs login
+```
+
 ### Use a different redirect port
 
 If port 3000 is already in use, you can change or add the field `loginServerPort` in the config file,

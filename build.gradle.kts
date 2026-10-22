@@ -22,7 +22,7 @@ dependencies {
     ksp("com.google.dagger:dagger-compiler:2.57.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 
-    implementation("ch.qos.logback:logback-classic:1.5.21")
+    implementation("ch.qos.logback:logback-classic:1.6.5")
     implementation("io.javalin:javalin:6.7.0")
 
     implementation("se.michaelthelin.spotify:spotify-web-api-java:9.4.0")

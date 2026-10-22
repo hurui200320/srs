@@ -87,6 +87,16 @@ class ConfigStore @Inject constructor() {
         }
     }
 
+    /**
+     * Clear the stored refresh token.
+     * */
+    fun clearRefreshToken() {
+        readWriteLock.write {
+            require(configModel != null) { "config is not initialized yet" }
+            configModel = configModel!!.copy(refreshToken = null)
+        }
+    }
+
     fun getLoginServerPort(): Int = readWriteLock.read {
         require(configModel != null) { "config is not initialized yet" }
         configModel!!.loginServerPort
