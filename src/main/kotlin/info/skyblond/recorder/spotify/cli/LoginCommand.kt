@@ -34,9 +34,8 @@ class LoginCommand(
             .build()
 
         val codeRef = AtomicReference("")
-        val server = Javalin.create()
-        server
-            .get("/") { ctx ->
+        val server = Javalin.create { config ->
+            config.routes.get("/") { ctx ->
                 val code = ctx.queryParam("code")
                 val state = ctx.queryParam("state")
 
@@ -49,7 +48,7 @@ class LoginCommand(
                 ctx.result("Success! You may close this tab safely.")
                 codeRef.set(code)
             }
-            .start("localhost", 3000)
+        }.start("localhost", configStore.getLoginServerPort())
 
         echo("Please use this url to login: \n    " + authzCodeUriRequest.execute())
 

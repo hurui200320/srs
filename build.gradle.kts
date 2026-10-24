@@ -28,7 +28,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 
     implementation("ch.qos.logback:logback-classic:1.6.5")
-    implementation("io.javalin:javalin:6.7.0")
+    implementation("io.javalin:javalin:7.2.3")
 
     implementation("se.michaelthelin.spotify:spotify-web-api-java:9.4.0")
     implementation("net.bramp.ffmpeg:ffmpeg:0.8.0")
