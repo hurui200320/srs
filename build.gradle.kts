@@ -30,7 +30,7 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.6.5")
     implementation("io.javalin:javalin:7.2.3")
 
-    implementation("se.michaelthelin.spotify:spotify-web-api-java:9.4.0")
+    implementation("se.michaelthelin.spotify:spotify-web-api-java:10.0.0")
     implementation("net.bramp.ffmpeg:ffmpeg:0.9.2")
 
     implementation("com.github.ajalt.clikt:clikt:5.0.1")

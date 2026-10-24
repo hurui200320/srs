@@ -9,11 +9,17 @@ class MetadataFetcher(
 ) {
 
     fun fetchTracks(trackIds: List<String>): List<Track> {
-        return trackIds.chunked(50).flatMap {
-            val req = spotifyApi.getSeveralTracks(*it.toTypedArray())
+        // The batch GET /tracks endpoint is no longer available to development-mode
+        // apps, and spotify-web-api-java 10 deprecates getSeveralTracks. Fetch each
+        // track individually instead, as recommended by Spotify's migration guide.
+        // Requests are deduplicated so a track played twice in one session is only
+        // fetched once; the result still has one entry per input id, in input order.
+        val tracksById = trackIds.distinct().associateWith { trackId ->
+            spotifyApi.getTrack(trackId)
                 .apply { headers.forEach { (key, value) -> setHeader(key, value) } }
                 .build()
-            req.execute().toList()
+                .execute()
         }
+        return trackIds.map { tracksById.getValue(it) }
     }
 }
