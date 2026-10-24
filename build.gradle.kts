@@ -31,7 +31,7 @@ dependencies {
     implementation("io.javalin:javalin:7.2.3")
 
     implementation("se.michaelthelin.spotify:spotify-web-api-java:9.4.0")
-    implementation("net.bramp.ffmpeg:ffmpeg:0.8.0")
+    implementation("net.bramp.ffmpeg:ffmpeg:0.9.2")
 
     implementation("com.github.ajalt.clikt:clikt:5.0.1")
     // optional support for rendering markdown in help messages

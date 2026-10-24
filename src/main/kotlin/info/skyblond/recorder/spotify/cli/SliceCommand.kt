@@ -182,34 +182,19 @@ class SliceCommand(
             }
 
             val albumImage = imageDownloadService.downloadAlbumImage(albumImageUrl)
-            val ffmpegCmd = FFmpegBuilder()
-                .overrideOutputFiles(true)
-                .setVerbosity(FFmpegBuilder.Verbosity.ERROR)
-                .addExtraArgs("-ss", "%.3f".format(ss))
-                .addExtraArgs("-t", "%.3f".format(duration))
-                .addInput(recordingFile.absolutePath) // input 0
-                .addInput(albumImage.absolutePath) // input 1
-
-                .addOutput(outputFile.absolutePath)
-                .addExtraArgs("-c:a", "flac")
-                .addExtraArgs("-sample_fmt", "s32")
-                .addExtraArgs("-compression_level", "8")
-                // do not add dither for lossless
-                .addExtraArgs("-dither_method", "none")
-                .addExtraArgs("-af", "volume=-0.5dB")
-                // metadata
-                .addExtraArgs("-metadata", "title=$trackName")
-                .addExtraArgs("-metadata", "artist=$artistsStr")
-                .addExtraArgs("-metadata", "album=$albumName")
-                .addExtraArgs("-metadata", "track=$trackNumber")
-                .addExtraArgs("-metadata", "disc=$diskNumber")
-                .addExtraArgs("-metadata", "spotifyTrackId=${track.id}")
-                // album image
-                .addExtraArgs("-map", "0:a") // read audio from input 0
-                .addExtraArgs("-map", "1:0") // read pic from input 1
-                .addExtraArgs("-c:v", "copy") // copy the video stream (album pic)
-                .addExtraArgs("-disposition:v", "attached_pic") // treat video stream as album pic
-                .done()
+            val ffmpegCmd = buildSliceCommand(
+                recordingFile = recordingFile,
+                albumImage = albumImage,
+                outputFile = outputFile,
+                startSeconds = ss,
+                durationSeconds = duration,
+                trackName = trackName,
+                artistsStr = artistsStr,
+                albumName = albumName,
+                trackNumber = trackNumber,
+                discNumber = diskNumber,
+                spotifyTrackId = track.id,
+            )
             ffmpegExecutor.createJob(ffmpegCmd).run()
             albumImage.delete()
             echo(
@@ -240,3 +225,55 @@ class SliceCommand(
         }
     }
 }
+
+/**
+ * Build the ffmpeg command that cuts one track out of the recording and attaches
+ * the album art as its cover.
+ *
+ * Kept separate from [SliceCommand.run] so the generated argument list can be
+ * pinned by tests: the ffmpeg wrapper assembles the argv itself, and its builder
+ * API has changed across upgrades (e.g. 0.8 -> 0.9 made `addInput` return an
+ * input builder that must be finalized with `done()`).
+ */
+internal fun buildSliceCommand(
+    recordingFile: File,
+    albumImage: File,
+    outputFile: File,
+    startSeconds: Double,
+    durationSeconds: Double,
+    trackName: String,
+    artistsStr: String,
+    albumName: String,
+    trackNumber: Int,
+    discNumber: Int,
+    spotifyTrackId: String,
+): FFmpegBuilder = FFmpegBuilder()
+    .overrideOutputFiles(true)
+    .setVerbosity(FFmpegBuilder.Verbosity.ERROR)
+    .addExtraArgs("-ss", "%.3f".format(startSeconds))
+    .addExtraArgs("-t", "%.3f".format(durationSeconds))
+    .addInput(recordingFile.absolutePath) // input 0
+    .done() // required since ffmpeg 0.9.x: addInput returns an input builder
+    .addInput(albumImage.absolutePath) // input 1
+    .done()
+
+    .addOutput(outputFile.absolutePath)
+    .addExtraArgs("-c:a", "flac")
+    .addExtraArgs("-sample_fmt", "s32")
+    .addExtraArgs("-compression_level", "8")
+    // do not add dither for lossless
+    .addExtraArgs("-dither_method", "none")
+    .addExtraArgs("-af", "volume=-0.5dB")
+    // metadata
+    .addExtraArgs("-metadata", "title=$trackName")
+    .addExtraArgs("-metadata", "artist=$artistsStr")
+    .addExtraArgs("-metadata", "album=$albumName")
+    .addExtraArgs("-metadata", "track=$trackNumber")
+    .addExtraArgs("-metadata", "disc=$discNumber")
+    .addExtraArgs("-metadata", "spotifyTrackId=$spotifyTrackId")
+    // album image
+    .addExtraArgs("-map", "0:a") // read audio from input 0
+    .addExtraArgs("-map", "1:0") // read pic from input 1
+    .addExtraArgs("-c:v", "copy") // copy the video stream (album pic)
+    .addExtraArgs("-disposition:v", "attached_pic") // treat video stream as album pic
+    .done()
