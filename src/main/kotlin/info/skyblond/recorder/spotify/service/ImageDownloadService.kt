@@ -1,13 +1,12 @@
 package info.skyblond.recorder.spotify.service
 
-import jakarta.inject.Inject
 import java.io.File
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
-class ImageDownloadService @Inject constructor(
+class ImageDownloadService(
     private val httpClient: HttpClient
 ) {
     fun downloadAlbumImage(

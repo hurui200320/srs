@@ -1,8 +1,8 @@
 plugins {
-    kotlin("jvm") version "2.2.21"
+    kotlin("jvm") version "2.4.20"
     application
-    id("com.google.devtools.ksp") version "2.3.4"
-    kotlin("plugin.serialization") version "2.2.21"
+    id("io.insert-koin.compiler.plugin") version "1.2.1"
+    kotlin("plugin.serialization") version "2.4.20"
 }
 
 group = "info.skyblond"
@@ -17,9 +17,14 @@ application {
     executableDir = ""
 }
 
+// dependency injection: Koin core + the compiler plugin, which validates the
+// classic org.koin.dsl definitions in di/AppModule.kt at compile time (KOIN-D002)
+val koinVersion = "4.2.2"
+
 dependencies {
-    implementation("com.google.dagger:dagger:2.57.2")
-    ksp("com.google.dagger:dagger-compiler:2.57.2")
+    implementation(platform("io.insert-koin:koin-bom:$koinVersion"))
+    implementation("io.insert-koin:koin-core")
+
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 
     implementation("ch.qos.logback:logback-classic:1.6.5")
@@ -37,9 +42,13 @@ dependencies {
 }
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(25)
 }
 
 tasks.test {
     useJUnitPlatform()
+}
+
+koinCompiler {
+    aiAssist = false
 }

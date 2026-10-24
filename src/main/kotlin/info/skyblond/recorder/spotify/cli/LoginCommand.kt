@@ -3,8 +3,6 @@ package info.skyblond.recorder.spotify.cli
 import com.github.ajalt.clikt.core.CliktCommand
 import info.skyblond.recorder.spotify.config.ConfigStore
 import io.javalin.Javalin
-import jakarta.inject.Inject
-import jakarta.inject.Provider
 import se.michaelthelin.spotify.SpotifyApi
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.absoluteValue
@@ -13,12 +11,12 @@ import kotlin.random.Random
 /**
  * Command that login to the user's spotify account.
  * */
-class LoginCommand @Inject constructor(
-    spotifyApi: Provider<SpotifyApi>,
+class LoginCommand(
+    spotifyApi: Lazy<SpotifyApi>,
     private val configStore: ConfigStore
 ) : CliktCommand(name = "login") {
 
-    private val spotifyApi by lazy { spotifyApi.get() }
+    private val spotifyApi by spotifyApi
 
     override fun run() {
         val requestState = Random.nextLong().absoluteValue.toString()

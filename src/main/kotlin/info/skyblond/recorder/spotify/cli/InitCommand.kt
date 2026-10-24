@@ -7,12 +7,11 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.options.validate
 import info.skyblond.recorder.spotify.config.ConfigStore
-import jakarta.inject.Inject
 
 /**
  * Init config file with client id and client secret.
  * */
-class InitCommand @Inject constructor(
+class InitCommand(
     private val configStore: ConfigStore
 ): CliktCommand(name = "init") {
     private val clientId by option("-i", "--client-id", help = "Spotify client ID")

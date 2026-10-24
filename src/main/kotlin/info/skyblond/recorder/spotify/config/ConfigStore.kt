@@ -1,15 +1,12 @@
 package info.skyblond.recorder.spotify.config
 
-import jakarta.inject.Inject
-import jakarta.inject.Singleton
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
 
-@Singleton
-class ConfigStore @Inject constructor() {
+class ConfigStore {
     private val readWriteLock = ReentrantReadWriteLock(true)
 
     /**

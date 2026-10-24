@@ -6,11 +6,10 @@ import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.file
 import info.skyblond.recorder.spotify.config.ConfigStore
-import jakarta.inject.Inject
 import java.io.File
 
-class RootCommand @Inject constructor(
-    subcommands: Set<@JvmSuppressWildcards CliktCommand>,
+class RootCommand(
+    subcommands: List<CliktCommand>,
     private val configStore: ConfigStore
 ) : CliktCommand(
     name = "srs"

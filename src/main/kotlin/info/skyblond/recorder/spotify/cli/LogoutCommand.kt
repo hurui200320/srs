@@ -2,12 +2,11 @@ package info.skyblond.recorder.spotify.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
 import info.skyblond.recorder.spotify.config.ConfigStore
-import jakarta.inject.Inject
 
 /**
  * Command that clears the stored Spotify refresh token.
  * */
-class LogoutCommand @Inject constructor(
+class LogoutCommand(
     private val configStore: ConfigStore
 ) : CliktCommand(name = "logout") {
 

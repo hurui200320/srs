@@ -13,8 +13,6 @@ import info.skyblond.recorder.spotify.service.MetadataFetcher
 import info.skyblond.recorder.spotify.service.TrackInfo
 import info.skyblond.recorder.spotify.service.TransitionDetector
 import info.skyblond.recorder.spotify.wav.WavSampleReader
-import jakarta.inject.Inject
-import jakarta.inject.Provider
 import net.bramp.ffmpeg.FFmpegExecutor
 import net.bramp.ffmpeg.builder.FFmpegBuilder
 import java.io.File
@@ -23,12 +21,13 @@ import kotlin.math.abs
 /**
  * Slice the recording based on the provided input.
  * */
-class SliceCommand @Inject constructor(
-    metadataFetcher: Provider<MetadataFetcher>,
-    private val ffmpegExecutor: FFmpegExecutor,
+class SliceCommand(
+    metadataFetcher: Lazy<MetadataFetcher>,
+    ffmpegExecutor: Lazy<FFmpegExecutor>,
     private val imageDownloadService: ImageDownloadService,
 ) : CliktCommand(name = "slice") {
-    private val metadataFetcher by lazy { metadataFetcher.get() }
+    private val metadataFetcher by metadataFetcher
+    private val ffmpegExecutor by ffmpegExecutor
 
     private val outputFolder by option("-o", "--output", help = "Output folder for processed files")
         .file(mustExist = false, canBeDir = true, canBeFile = false)
